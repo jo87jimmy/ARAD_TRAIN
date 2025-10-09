@@ -514,6 +514,7 @@ def main(obj_names, args):
             # 確保你有一個驗證 DataLoader (val_loader)
             if val_loader:
                 student_model.eval()  # 設定為評估模式
+                student_seg_model.eval()
                 all_pred_masks = []
                 all_gt_masks = []
                 with torch.no_grad():
@@ -521,19 +522,21 @@ def main(obj_names, args):
                             val_loader):
                         input_image_val = sample_batched_val["image"].to(
                             device)
+
                         ground_truth_mask_val = sample_batched_val[
                             "anomaly_mask"].to(device).float()
-                        aug_gray_batch_val = sample_batched_val[
-                            "augmented_image"].to(device)
+                        # aug_gray_batch_val = sample_batched_val[
+                        #     "augmented_image"].to(device)
 
-                        # 直接將原始的 input_image_val (3通道) 傳入模型
-                        _, student_seg_map_val_raw, _ = student_model(
-                            input_image_val, return_feats=True)  # 使用灰度圖作為輸入
+                        student_recon= student_model(
+                            input_image_val)
+                        student_joined_in = torch.cat((input_image_val.detach(), input_image_val), dim=1)
 
-                        student_seg_map_val = student_seg_map_val_raw[:,
-                                                                      1, :, :]
-                        student_seg_map_val = student_seg_map_val.unsqueeze(
-                            1)  # 確保形狀是 (B, 1, H, W)
+                        student_seg_out_mask = student_seg_model(student_joined_in)
+                        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
+
+                        student_seg_map_val = student_seg_map[:,1, :, :]
+                        student_seg_map_val = student_seg_map_val.unsqueeze(1)  # 確保形狀是 (B, 1, H, W)
 
                         # 將預測結果和真實標籤收集起來
                         all_pred_masks.append(
