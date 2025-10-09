@@ -279,9 +279,9 @@ def main(obj_names, args):
         IMG_CHANNELS = 3
         # 建立教師模型的結構，輸入與輸出通道皆為 3（RGB），並移動到指定裝置上
         teacher_model = ReconstructiveSubNetwork(
-            recon_in=IMG_CHANNELS,
-            recon_out=IMG_CHANNELS,
-            recon_base=128,  # 教師重建網路較寬
+            in_channels=IMG_CHANNELS,
+            out_channels=IMG_CHANNELS,
+            base_width=128,  # 教師重建網路較寬
         ).to(device)
 
         # 現在使用修正後的 state_dict 載入，並使用 strict=True 來確保所有權重都正確載入
@@ -303,9 +303,10 @@ def main(obj_names, args):
         IMG_SEG_CHANNELS = 6
         IMG_SEG_CHANNELS_OUT = 2
         teacher_seg_model = DiscriminativeSubNetwork(
-            seg_in=IMG_SEG_CHANNELS,
-            seg_out=IMG_SEG_CHANNELS_OUT,
-            seg_base=64,  # 教師重建網路較寬
+            in_channels=IMG_SEG_CHANNELS,
+            out_channels=IMG_SEG_CHANNELS_OUT,
+            base_channels=64,  # 教師重建網路較寬
+            out_features=False,
         ).to(device)
         teacher_seg_model.load_state_dict(teacher_seg_ckpt, strict=True)
         # 將教師模型設為評估模式，停用 Dropout、BatchNorm 等訓練專用機制
@@ -314,18 +315,19 @@ def main(obj_names, args):
         # Student model
         #dropout 防止過擬合，幫助學生模型泛化，避免過擬合教師模型提取的特徵。在蒸餾訓練時，讓學生模型學到更穩健的特徵，而不是完全模仿教師模型的單一路徑
         student_model = ReconstructiveSubNetwork(
-            recon_in=IMG_CHANNELS,
-            recon_out=IMG_CHANNELS,
-            recon_base=64,  # 學生重建網路較窄
+            in_channels=IMG_CHANNELS,
+            out_channels=IMG_CHANNELS,
+            base_width=64,  # 學生重建網路較窄
         ).to(device)
 
         #初始化 卷積層和 BatchNorm 層的初始權重分布合理，幫助模型更快收斂
         student_model.apply(weights_init)
 
         student_seg_model = DiscriminativeSubNetwork(
-            seg_in=IMG_SEG_CHANNELS,
-            seg_out=IMG_SEG_CHANNELS_OUT,
-            seg_base=32,  # 學生重建網路較窄
+            in_channels=IMG_SEG_CHANNELS,
+            out_channels=IMG_SEG_CHANNELS_OUT,
+            base_channels=32,  # 學生重建網路較窄
+            out_features=False,
         ).to(device)
 
         #初始化 卷積層和 BatchNorm 層的初始權重分布合理，幫助模型更快收斂
