@@ -597,7 +597,7 @@ def main(obj_names, args):
                     binary_pred_masks_flat,  # y_pred 也是 int
                     zero_division=0)
 
-                print("-" * 50)
+                print("-" * 50) 
                 print(f"Epoch {epoch} Anomaly Detection Metrics:")
                 print(f"  - Pixel-level AUROC   : {pixel_auroc:.4f}")
                 print(f"  - Pixel-level PR-AUC  : {pixel_pr_auc:.4f}")
@@ -625,8 +625,12 @@ def main(obj_names, args):
                     # best_auroc_epoch = epoch # 可以保存 epoch 號碼
                     save_path = os.path.join(
                         checkpoint_dir,
-                        f"{obj_name}_best_auroc.pckl")  # 建議更名以區分
+                        f"{obj_name}_best_recon.pckl")  # 建議更名以區分
+                    save_seg_path = os.path.join(
+                        checkpoint_dir,
+                        f"{obj_name}_best_seg.pckl")  # 建議更名以區分
                     torch.save(student_model.state_dict(), save_path)
+                    torch.save(student_seg_model.state_dict(), save_seg_path)
                     print(
                         f"✅ New best model saved at epoch {epoch} based on Pixel-level AUROC!"
                     )
