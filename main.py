@@ -14,7 +14,7 @@ import argparse  # 命令列參數處理
 import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 from loss import FocalLoss, SSIM
-from model_unet import ReconstructiveSubNetwork,DiscriminativeSubNetwork
+from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
 from data_loader import MVTecDRAEMTrainDataset, MVTecDRAEMTestDataset
 import matplotlib.pyplot as plt
 import torchvision.transforms as transforms
@@ -337,9 +337,13 @@ def main(obj_names, args):
         # optimizer = torch.optim.Adam(list(student_model.parameters()) +
         #                              list(feature_aligns.parameters()),
         #                              lr=args.lr)
-        optimizer = torch.optim.Adam([
-                                      {"params": student_model.parameters(), "lr": args.lr},
-                                      {"params": student_seg_model.parameters(), "lr": args.lr}])
+        optimizer = torch.optim.Adam([{
+            "params": student_model.parameters(),
+            "lr": args.lr
+        }, {
+            "params": student_seg_model.parameters(),
+            "lr": args.lr
+        }])
         # 設定學習率調整策略，使用 MultiStepLR(一開始大步走，後面小步走)
         scheduler = optim.lr_scheduler.MultiStepLR(
             optimizer,  # 需要調整的優化器
@@ -396,8 +400,8 @@ def main(obj_names, args):
         # --- 超參數定義 ---
         lambda_l2 = 1.0
         lambda_ssim = 1.0
-        lambda_segment = 2.0  # 分割損失權重 1.0 -> 1.5 ->2.0
-        lambda_distill = 0.2  # 蒸餾損失權重，作為輔助項 0.5
+        lambda_segment = 1.0  # 分割損失權重 1.0 -> 1.5 ->2.0
+        lambda_distill = 0.5  # 蒸餾損失權重，作為輔助項 0.5
         best_pixel_auroc = 0.0  # 初始化最佳 Pixel AUROC
         for epoch in range(args.epochs):
             print("Epoch: " + str(epoch))
@@ -417,15 +421,15 @@ def main(obj_names, args):
 
                 # --- 教師網路前向傳播 ---
                 with torch.no_grad():
-                    teacher_recon = teacher_model(
-                        aug_gray_batch)
-                    teacher_joined_in = torch.cat((teacher_recon, aug_gray_batch), dim=1)
+                    teacher_recon = teacher_model(aug_gray_batch)
+                    teacher_joined_in = torch.cat(
+                        (teacher_recon, aug_gray_batch), dim=1)
                     teacher_out_mask = teacher_seg_model(teacher_joined_in)
                     teacher_seg_map = torch.softmax(teacher_out_mask, dim=1)
                 # --- 學生網路前向傳播 ---
-                student_recon= student_model(
-                    aug_gray_batch)
-                student_joined_in = torch.cat((student_recon, aug_gray_batch), dim=1)
+                student_recon = student_model(aug_gray_batch)
+                student_joined_in = torch.cat((student_recon, aug_gray_batch),
+                                              dim=1)
                 student_out_mask = student_seg_model(student_joined_in)
                 student_seg_map = torch.softmax(student_out_mask, dim=1)
 
@@ -475,20 +479,20 @@ def main(obj_names, args):
                 total_loss.backward()
                 optimizer.step()
 
-                # # --- 視覺化 ---
-                # if i_batch % 100 == 0:
-                #     visualize_predictions(
-                #         teacher_model, student_model, sample_batched, device,
-                #         os.path.join(save_root,
-                #                      f"vis_epoch_{epoch}_batch_{i_batch}"))
+                # --- 視覺化 ---
+                if i_batch % 100 == 0:
+                    visualize_predictions(
+                        teacher_model, student_model, sample_batched, device,
+                        os.path.join(save_root,
+                                     f"vis_epoch_{epoch}_batch_{i_batch}"))
 
-                # if i_batch % 500 == 0:
-                #     detailed_diagnostic_visualization(
-                #         teacher_model, student_model, loss_focal,
-                #         sample_batched, device,
-                #         os.path.join(save_root,
-                #                      f"diag_epoch_{epoch}_batch_{i_batch}"),
-                #         epoch, i_batch)
+                if i_batch % 500 == 0:
+                    detailed_diagnostic_visualization(
+                        teacher_model, student_model, loss_focal,
+                        sample_batched, device,
+                        os.path.join(save_root,
+                                     f"diag_epoch_{epoch}_batch_{i_batch}"),
+                        epoch, i_batch)
 
                 # --- 累加損失統計 ---
                 epoch_loss += total_loss.item()
@@ -528,15 +532,18 @@ def main(obj_names, args):
                         # aug_gray_batch_val = sample_batched_val[
                         #     "augmented_image"].to(device)
 
-                        student_recon= student_model(
-                            input_image_val)
-                        student_joined_in = torch.cat((input_image_val.detach(), input_image_val), dim=1)
+                        student_recon = student_model(input_image_val)
+                        student_joined_in = torch.cat(
+                            (student_recon, input_image_val), dim=1)
 
-                        student_seg_out_mask = student_seg_model(student_joined_in)
-                        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
+                        student_seg_out_mask = student_seg_model(
+                            student_joined_in)
+                        student_seg_map = torch.softmax(student_seg_out_mask,
+                                                        dim=1)
 
-                        student_seg_map_val = student_seg_map[:,1, :, :]
-                        student_seg_map_val = student_seg_map_val.unsqueeze(1)  # 確保形狀是 (B, 1, H, W)
+                        student_seg_map_val = student_seg_map[:, 1, :, :]
+                        student_seg_map_val = student_seg_map_val.unsqueeze(
+                            1)  # 確保形狀是 (B, 1, H, W)
 
                         # 將預測結果和真實標籤收集起來
                         all_pred_masks.append(
@@ -597,7 +604,7 @@ def main(obj_names, args):
                     binary_pred_masks_flat,  # y_pred 也是 int
                     zero_division=0)
 
-                print("-" * 50) 
+                print("-" * 50)
                 print(f"Epoch {epoch} Anomaly Detection Metrics:")
                 print(f"  - Pixel-level AUROC   : {pixel_auroc:.4f}")
                 print(f"  - Pixel-level PR-AUC  : {pixel_pr_auc:.4f}")
@@ -627,8 +634,7 @@ def main(obj_names, args):
                         checkpoint_dir,
                         f"{obj_name}_best_recon.pckl")  # 建議更名以區分
                     save_seg_path = os.path.join(
-                        checkpoint_dir,
-                        f"{obj_name}_best_seg.pckl")  # 建議更名以區分
+                        checkpoint_dir, f"{obj_name}_best_seg.pckl")  # 建議更名以區分
                     torch.save(student_model.state_dict(), save_path)
                     torch.save(student_seg_model.state_dict(), save_seg_path)
                     print(
