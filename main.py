@@ -81,8 +81,8 @@ def weights_init(m):
         m.bias.data.fill_(0)
 
 
-def visualize_predictions(teacher_model, student_model, batch, device,
-                          save_path):
+def visualize_predictions(teacher_model, teacher_seg_model, student_model,
+                          student_seg_model, batch, device, save_path):
     """
     視覺化教師模型和學生模型的預測結果對比
     """
@@ -94,9 +94,16 @@ def visualize_predictions(teacher_model, student_model, batch, device,
         gt_mask = batch["anomaly_mask"].to(device)
 
         # 教師預測
-        teacher_recon, teacher_seg = teacher_model(aug_image)
+        teacher_recon = teacher_model(aug_image)
+        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)
+        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)
+        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)
+
         # 學生預測
-        student_recon, student_seg = student_model(aug_image)
+        student_recon = student_model(aug_image)
+        student_joined_in = torch.cat((student_recon, aug_image), dim=1)
+        student_seg_out_mask = student_seg_model(student_joined_in)
+        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
 
         # 轉換為 numpy 用於繪圖
         input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)
@@ -104,9 +111,10 @@ def visualize_predictions(teacher_model, student_model, batch, device,
         gt_mask_np = gt_mask.cpu().numpy()[0, 0]  # 取第一個通道
 
         # 處理分割結果
-        teacher_seg_np = torch.softmax(teacher_seg,
+        teacher_seg_np = torch.softmax(teacher_seg_map,
                                        dim=1)[0, 1].cpu().numpy()  # 異常類別概率
-        student_seg_np = torch.softmax(student_seg, dim=1)[0, 1].cpu().numpy()
+        student_seg_np = torch.softmax(student_seg_map,
+                                       dim=1)[0, 1].cpu().numpy()
 
         # 創建圖像
         fig, axes = plt.subplots(2, 4, figsize=(20, 10))
@@ -156,9 +164,10 @@ def visualize_predictions(teacher_model, student_model, batch, device,
         print(f"✅ Visualization saved: {save_path}.png")
 
 
-def detailed_diagnostic_visualization(teacher_model, student_model, loss_focal,
-                                      batch, device, save_path, epoch,
-                                      i_batch):
+def detailed_diagnostic_visualization(teacher_model, teacher_seg_model,
+                                      student_model, student_seg_model,
+                                      loss_focal, batch, device, save_path,
+                                      epoch, i_batch):
     """
     更詳細的診斷視覺化，包含損失值和指標
     """
@@ -170,20 +179,31 @@ def detailed_diagnostic_visualization(teacher_model, student_model, loss_focal,
         gt_mask = batch["anomaly_mask"].to(device)
 
         # 獲取預測
-        teacher_recon, teacher_seg = teacher_model(aug_image)
-        student_recon, student_seg = student_model(aug_image)
+        # 教師預測
+        teacher_recon = teacher_model(aug_image)
+        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)
+        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)
+        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)
+
+        # 學生預測
+        student_recon = student_model(aug_image)
+        student_joined_in = torch.cat((student_recon, aug_image), dim=1)
+        student_seg_out_mask = student_seg_model(student_joined_in)
+        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
 
         # 計算當前損失（僅用於顯示）
-        seg_distill_loss = F.mse_loss(student_seg, teacher_seg).item()
-        student_seg_softmax = torch.softmax(student_seg, dim=1)
+        seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map).item()
+        student_seg_softmax = torch.softmax(student_seg_map, dim=1)
         orig_seg_loss = loss_focal(student_seg_softmax, gt_mask).item()
 
         # 轉換為 numpy
         input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)
         aug_np = aug_image.cpu().numpy()[0].transpose(1, 2, 0)
         gt_mask_np = gt_mask.cpu().numpy()[0, 0]
-        teacher_seg_np = torch.softmax(teacher_seg, dim=1)[0, 1].cpu().numpy()
-        student_seg_np = torch.softmax(student_seg, dim=1)[0, 1].cpu().numpy()
+        teacher_seg_np = torch.softmax(teacher_seg_map,
+                                       dim=1)[0, 1].cpu().numpy()
+        student_seg_np = torch.softmax(student_seg_map,
+                                       dim=1)[0, 1].cpu().numpy()
 
         # 創建診斷圖
         fig, axes = plt.subplots(2, 5, figsize=(25, 10))
@@ -482,14 +502,15 @@ def main(obj_names, args):
                 # --- 視覺化 ---
                 if i_batch % 100 == 0:
                     visualize_predictions(
-                        teacher_model, student_model, sample_batched, device,
+                        teacher_model, teacher_seg_model, student_model,
+                        student_seg_model, sample_batched, device,
                         os.path.join(save_root,
                                      f"vis_epoch_{epoch}_batch_{i_batch}"))
 
                 if i_batch % 500 == 0:
                     detailed_diagnostic_visualization(
-                        teacher_model, student_model, loss_focal,
-                        sample_batched, device,
+                        teacher_model, teacher_seg_model, student_model,
+                        student_seg_model, loss_focal, sample_batched, device,
                         os.path.join(save_root,
                                      f"diag_epoch_{epoch}_batch_{i_batch}"),
                         epoch, i_batch)
