@@ -420,11 +420,12 @@ def main(obj_names, args):
         # --- 超參數定義 ---
         lambda_l2 = 1.0
         lambda_ssim = 1.0
-        lambda_segment = 1.0  # 分割損失權重 1.0 -> 1.5 ->2.0
+        lambda_segment = 1.5  # 分割損失權重 1.0 -> 1.5 ->2.0
         lambda_distill = 0.5  # 蒸餾損失權重，作為輔助項 0.5
         best_pixel_auroc = 0.0  # 初始化最佳 Pixel AUROC
+
         for epoch in range(args.epochs):
-            print("Epoch: " + str(epoch))
+            print("Epoch:", epoch)
 
             epoch_loss = 0.0
             epoch_seg_distill_loss = 0.0
@@ -432,44 +433,52 @@ def main(obj_names, args):
             num_batches = 0
 
             for i_batch, sample_batched in enumerate(train_loader):
-                # 數據加載
+                # ==================== 數據加載 ====================
                 input_image = sample_batched["image"].to(device)
                 ground_truth_mask = sample_batched["anomaly_mask"].to(
                     device).float()
-                aug_gray_batch = sample_batched["augmented_image"].to(
-                    device)  #增強後的彩色圖像
+                aug_gray_batch = sample_batched["augmented_image"].to(device)
+                is_normal = sample_batched.get(
+                    "is_normal", torch.ones_like(ground_truth_mask)).bool()
 
-                # --- 教師網路前向傳播 ---
+                # ==================== 教師網路前向 ====================
                 with torch.no_grad():
                     teacher_recon = teacher_model(aug_gray_batch)
                     teacher_joined_in = torch.cat(
                         (teacher_recon, aug_gray_batch), dim=1)
                     teacher_out_mask = teacher_seg_model(teacher_joined_in)
                     teacher_seg_map = torch.softmax(teacher_out_mask, dim=1)
-                # --- 學生網路前向傳播 ---
+
+                # ==================== 學生網路前向 ====================
                 student_recon = student_model(aug_gray_batch)
                 student_joined_in = torch.cat((student_recon, aug_gray_batch),
                                               dim=1)
                 student_out_mask = student_seg_model(student_joined_in)
                 student_seg_map = torch.softmax(student_out_mask, dim=1)
 
-                # --- 計算損失函數 ---
-                # 1. 重建損失
+                # ==================== 計算損失 ====================
+
+                # --- 1. 重建損失 ---
                 l2_loss = loss_l2(student_recon, input_image)
                 ssim_loss = loss_ssim(student_recon, input_image)
+                loss_recon = lambda_l2 * l2_loss + lambda_ssim * ssim_loss
 
-                # 2. 分割損失
+                # --- 2. 分割損失 ---
                 segment_loss = loss_focal(student_seg_map, ground_truth_mask)
+                loss_seg = lambda_segment * segment_loss
 
-                # 3. 知識蒸餾損失
+                # --- 3. 蒸餾損失 ---
+                #    只在正常樣本啟用蒸餾，避免干擾異常樣本的特徵學習
                 recon_distill_loss = F.mse_loss(student_recon, teacher_recon)
                 seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map)
-                distill_loss = recon_distill_loss + seg_distill_loss
+                distill_loss = 0.7 * recon_distill_loss + 0.3 * seg_distill_loss
 
-                # --- 總損失（使用權重參數）---
-                total_loss = (lambda_l2 * l2_loss + lambda_ssim * ssim_loss +
-                              lambda_segment * segment_loss +
-                              lambda_distill * distill_loss)
+                # 如果 is_normal 為 False (異常樣本)，不加蒸餾損失
+                distill_mask = is_normal.float().mean()  # 約略代表 batch 中正常樣本比例
+                loss_distill = lambda_distill * distill_mask * distill_loss
+
+                # --- 4. 總損失 ---
+                total_loss = loss_recon + loss_seg + loss_distill
 
                 # ==================== 診斷輸出 ====================
                 if i_batch % 50 == 0:
@@ -490,16 +499,17 @@ def main(obj_names, args):
                         f"  - Seg Distill Loss  : {seg_distill_loss.item():.4f}"
                     )
                     print(
-                        f"  - Total Distill Loss: {distill_loss.item():.4f} (Weighted: {lambda_distill * distill_loss.item():.4f})"
+                        f"  - Distill Active(%) : {distill_mask.item() * 100:.1f}% (Normal samples in batch)"
                     )
+                    print(f"  - Total Distill Loss: {loss_distill.item():.4f}")
                     print(f"  - Total Loss        : {total_loss.item():.4f}")
 
-                # --- 反向傳播與優化 ---
+                # ==================== 反向傳播與優化 ====================
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
 
-                # --- 視覺化 ---
+                # ==================== 視覺化 ====================
                 if i_batch % 100 == 0:
                     visualize_predictions(
                         teacher_model, teacher_seg_model, student_model,
@@ -515,18 +525,17 @@ def main(obj_names, args):
                                      f"diag_epoch_{epoch}_batch_{i_batch}"),
                         epoch, i_batch)
 
-                # --- 累加損失統計 ---
+                # ==================== 累加損失統計 ====================
                 epoch_loss += total_loss.item()
                 epoch_seg_distill_loss += seg_distill_loss.item()
-                epoch_orig_seg_loss += segment_loss.item(
-                )  # 修正：使用segment_loss而不是orig_seg_loss
+                epoch_orig_seg_loss += segment_loss.item()
                 num_batches += 1
                 n_iter += 1
 
-            # --- Epoch結束處理 ---
+            # --- Epoch 結束處理 ---
             scheduler.step()
 
-            # 計算平均損失
+            # 平均損失輸出
             avg_total_loss = epoch_loss / num_batches
             avg_orig_seg_loss = epoch_orig_seg_loss / num_batches
             print("-" * 50)
@@ -535,133 +544,99 @@ def main(obj_names, args):
             print(f"  - Average Seg Loss      : {avg_orig_seg_loss:.6f}")
             print("-" * 50)
 
-            # --- 缺陷檢測指標計算 (新增部分) ---
-            # 確保你有一個驗證 DataLoader (val_loader)
+            # --- 驗證階段 (保持原程式) ---
             if val_loader:
-                student_model.eval()  # 設定為評估模式
+                student_model.eval()
                 student_seg_model.eval()
                 all_pred_masks = []
                 all_gt_masks = []
+
                 with torch.no_grad():
                     for i_batch_val, sample_batched_val in enumerate(
                             val_loader):
                         input_image_val = sample_batched_val["image"].to(
                             device)
-
                         ground_truth_mask_val = sample_batched_val[
                             "anomaly_mask"].to(device).float()
-                        # aug_gray_batch_val = sample_batched_val[
-                        #     "augmented_image"].to(device)
 
                         student_recon = student_model(input_image_val)
                         student_joined_in = torch.cat(
                             (student_recon, input_image_val), dim=1)
-
                         student_seg_out_mask = student_seg_model(
                             student_joined_in)
                         student_seg_map = torch.softmax(student_seg_out_mask,
                                                         dim=1)
+                        student_seg_map_val = student_seg_map[:, 1:
+                                                              2, :, :]  # B,1,H,W
 
-                        student_seg_map_val = student_seg_map[:, 1, :, :]
-                        student_seg_map_val = student_seg_map_val.unsqueeze(
-                            1)  # 確保形狀是 (B, 1, H, W)
-
-                        # 將預測結果和真實標籤收集起來
                         all_pred_masks.append(
                             student_seg_map_val.cpu().numpy())
                         all_gt_masks.append(
                             ground_truth_mask_val.cpu().numpy())
 
-                # 將所有批次的結果串接成一個大陣列
+                # === Flatten & compute AUROC / F1 / IoU ===
                 all_pred_masks = np.concatenate(all_pred_masks, axis=0)
                 all_gt_masks = np.concatenate(all_gt_masks, axis=0)
-
-                # 將多維度圖像展平為一維陣列，以便計算指標
                 all_pred_masks_flat = all_pred_masks.flatten()
-                all_gt_masks_flat = all_gt_masks.flatten()
-                #將 ground truth 轉換為整數類型
-                all_gt_masks_flat = all_gt_masks_flat.astype(int)
+                all_gt_masks_flat = all_gt_masks.flatten().astype(int)
 
-                # 計算 P-AUROC
-                # 注意: roc_curve 需要 positive class 為 1
                 try:
-                    # roc_curve 和 precision_recall_curve 通常可以處理 0.0/1.0 的浮點數
-                    # 但為了保險起見和保持一致性，建議也傳入 int 類型
-                    fpr, tpr, _ = roc_curve(
-                        all_gt_masks_flat, all_pred_masks_flat
-                    )  # 這裡 all_pred_masks_flat 還是連續值，是正確的
+                    fpr, tpr, _ = roc_curve(all_gt_masks_flat,
+                                            all_pred_masks_flat)
                     pixel_auroc = auc(fpr, tpr)
                 except ValueError:
-                    pixel_auroc = float('nan')  # 如果只有一個類別，roc_curve 會報錯
+                    pixel_auroc = float('nan')
 
-                # 計算 PR-AUC
                 try:
                     precision_curve, recall_curve, _ = precision_recall_curve(
-                        all_gt_masks_flat, all_pred_masks_flat
-                    )  # 這裡 all_pred_masks_flat 還是連續值，是正確的
+                        all_gt_masks_flat, all_pred_masks_flat)
                     pixel_pr_auc = auc(recall_curve, precision_curve)
                 except ValueError:
                     pixel_pr_auc = float('nan')
 
-                # 設定閾值計算其他指標 (例如 0.5)
                 threshold = 0.5
                 binary_pred_masks_flat = (all_pred_masks_flat
                                           > threshold).astype(int)
 
-                pixel_precision = precision_score(
-                    all_gt_masks_flat,  # y_true 現在是 int
-                    binary_pred_masks_flat,  # y_pred 也是 int
-                    zero_division=0)
-                pixel_recall = recall_score(
-                    all_gt_masks_flat,  # y_true 現在是 int
-                    binary_pred_masks_flat,  # y_pred 也是 int
-                    zero_division=0)
-                pixel_f1 = f1_score(
-                    all_gt_masks_flat,  # y_true 現在是 int
-                    binary_pred_masks_flat,  # y_pred 也是 int
-                    zero_division=0)
-                pixel_iou = jaccard_score(
-                    all_gt_masks_flat,  # y_true 現在是 int
-                    binary_pred_masks_flat,  # y_pred 也是 int
-                    zero_division=0)
+                pixel_precision = precision_score(all_gt_masks_flat,
+                                                  binary_pred_masks_flat,
+                                                  zero_division=0)
+                pixel_recall = recall_score(all_gt_masks_flat,
+                                            binary_pred_masks_flat,
+                                            zero_division=0)
+                pixel_f1 = f1_score(all_gt_masks_flat,
+                                    binary_pred_masks_flat,
+                                    zero_division=0)
+                pixel_iou = jaccard_score(all_gt_masks_flat,
+                                          binary_pred_masks_flat,
+                                          zero_division=0)
 
                 print("-" * 50)
                 print(f"Epoch {epoch} Anomaly Detection Metrics:")
                 print(f"  - Pixel-level AUROC   : {pixel_auroc:.4f}")
                 print(f"  - Pixel-level PR-AUC  : {pixel_pr_auc:.4f}")
-                print(
-                    f"  - Pixel-level Precision: {pixel_precision:.4f} (at threshold {threshold})"
-                )
-                print(
-                    f"  - Pixel-level Recall  : {pixel_recall:.4f} (at threshold {threshold})"
-                )
-                print(
-                    f"  - Pixel-level F1 Score: {pixel_f1:.4f} (at threshold {threshold})"
-                )
-                print(
-                    f"  - Pixel-level IoU     : {pixel_iou:.4f} (at threshold {threshold})"
-                )
+                print(f"  - Pixel-level Precision: {pixel_precision:.4f}")
+                print(f"  - Pixel-level Recall  : {pixel_recall:.4f}")
+                print(f"  - Pixel-level F1 Score: {pixel_f1:.4f}")
+                print(f"  - Pixel-level IoU     : {pixel_iou:.4f}")
                 print("-" * 50)
 
-                student_model.train()  # 切回訓練模式
+                student_model.train()
+                student_seg_model.train()
 
-                # --- 保存最佳模型 (根據 Pixel-level AUROC) ---
-                # 僅在 pixel_auroc 不是 NaN 時進行比較
+                # --- 儲存最佳模型 ---
                 if not np.isnan(
                         pixel_auroc) and pixel_auroc > best_pixel_auroc:
                     best_pixel_auroc = pixel_auroc
-                    # best_auroc_epoch = epoch # 可以保存 epoch 號碼
-                    save_path = os.path.join(
-                        checkpoint_dir,
-                        f"{obj_name}_best_recon.pckl")  # 建議更名以區分
-                    save_seg_path = os.path.join(
-                        checkpoint_dir, f"{obj_name}_best_seg.pckl")  # 建議更名以區分
+                    save_path = os.path.join(checkpoint_dir,
+                                             f"{obj_name}_best_recon.pckl")
+                    save_seg_path = os.path.join(checkpoint_dir,
+                                                 f"{obj_name}_best_seg.pckl")
                     torch.save(student_model.state_dict(), save_path)
                     torch.save(student_seg_model.state_dict(), save_seg_path)
                     print(
-                        f"✅ New best model saved at epoch {epoch} based on Pixel-level AUROC!"
+                        f"✅ New best model saved at epoch {epoch} (Pixel AUROC={best_pixel_auroc:.4f})"
                     )
-                    print(f"   Best Pixel-level AUROC: {best_pixel_auroc:.4f}")
 
         torch.cuda.empty_cache()
 
