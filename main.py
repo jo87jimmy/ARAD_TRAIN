@@ -414,18 +414,24 @@ def main(obj_names, args):
         # 如果檢查點資料夾不存在，則建立該資料夾（exist_ok=True 表示若已存在則不報錯）
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        # 開始進行多輪訓練迴圈
         n_iter = 0
 
         # --- 超參數定義 ---
         lambda_l2 = 1.0
-        lambda_ssim = 1.0
-        lambda_segment = 1.5  # 分割損失權重 1.0 -> 1.5 ->2.0
-        lambda_distill = 0.5  # 蒸餾損失權重，作為輔助項 0.5
+        lambda_ssim = 0.5  # (D) 降低 SSIM 比例
+        lambda_segment = 2.0  # (A) 提高分割損失權重
+        lambda_recon_distill = 0.3  # (E) 分離蒸餾權重
+        lambda_seg_distill = 0.7
         best_pixel_auroc = 0.0  # 初始化最佳 Pixel AUROC
 
         for epoch in range(args.epochs):
             print("Epoch:", epoch)
+
+            # (B) 動態蒸餾權重：前 10 epoch 不啟用，之後線性增加
+            if epoch < 10:
+                lambda_distill = 0.0
+            else:
+                lambda_distill = 0.5 * (epoch / args.epochs)
 
             epoch_loss = 0.0
             epoch_seg_distill_loss = 0.0
@@ -456,81 +462,47 @@ def main(obj_names, args):
                 student_out_mask = student_seg_model(student_joined_in)
                 student_seg_map = torch.softmax(student_out_mask, dim=1)
 
-                # ==================== 計算損失 ====================
+                # ==================== (C) 加權重建損失 ====================
+                # 將 L2、SSIM 對正常區域 (1 - mask) 加權
+                l2_map = (student_recon - input_image)**2
+                weighted_l2 = (l2_map * (1 - ground_truth_mask)).mean()
 
-                # --- 1. 重建損失 ---
-                l2_loss = loss_l2(student_recon, input_image)
-                ssim_loss = loss_ssim(student_recon, input_image)
-                loss_recon = lambda_l2 * l2_loss + lambda_ssim * ssim_loss
+                ssim_map = loss_ssim(student_recon, input_image, return_map=True) \
+                    if hasattr(loss_ssim, "return_map") else loss_ssim(student_recon, input_image)
+                if isinstance(ssim_map, torch.Tensor) and ssim_map.ndim > 0:
+                    weighted_ssim = (ssim_map * (1 - ground_truth_mask)).mean()
+                else:
+                    weighted_ssim = ssim_map
 
-                # --- 2. 分割損失 ---
+                loss_recon = lambda_l2 * weighted_l2 + lambda_ssim * weighted_ssim
+
+                # ==================== (A) 分割損失 ====================
                 segment_loss = loss_focal(student_seg_map, ground_truth_mask)
                 loss_seg = lambda_segment * segment_loss
 
-                # --- 3. 蒸餾損失 ---
-                #    只在正常樣本啟用蒸餾，避免干擾異常樣本的特徵學習
+                # ==================== (E) 分離蒸餾損失 ====================
                 recon_distill_loss = F.mse_loss(student_recon, teacher_recon)
                 seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map)
-                distill_loss = 0.7 * recon_distill_loss + 0.3 * seg_distill_loss
+                distill_loss = (lambda_recon_distill * recon_distill_loss +
+                                lambda_seg_distill * seg_distill_loss)
 
-                # 如果 is_normal 為 False (異常樣本)，不加蒸餾損失
-                distill_mask = is_normal.float().mean()  # 約略代表 batch 中正常樣本比例
+                # 蒸餾掩碼：僅對正常樣本啟用
+                distill_mask = is_normal.float().mean()
                 loss_distill = lambda_distill * distill_mask * distill_loss
 
-                # --- 4. 總損失 ---
-                total_loss = loss_recon + loss_seg + loss_distill
+                # ==================== (B) Warmup 蒸餾控制 ====================
+                if epoch < 10:
+                    total_loss = loss_recon + loss_seg
+                else:
+                    total_loss = loss_recon + loss_seg + loss_distill
 
-                # ==================== 診斷輸出 ====================
-                if i_batch % 50 == 0:
-                    print(f"\n[Epoch {epoch}, Batch {i_batch}] Loss values:")
-                    print(
-                        f"  - L2 Loss           : {l2_loss.item():.4f} (Weighted: {lambda_l2 * l2_loss.item():.4f})"
-                    )
-                    print(
-                        f"  - SSIM Loss         : {ssim_loss.item():.4f} (Weighted: {lambda_ssim * ssim_loss.item():.4f})"
-                    )
-                    print(
-                        f"  - Segment Loss      : {segment_loss.item():.4f} (Weighted: {lambda_segment * segment_loss.item():.4f})"
-                    )
-                    print(
-                        f"  - Recon Distill Loss: {recon_distill_loss.item():.4f}"
-                    )
-                    print(
-                        f"  - Seg Distill Loss  : {seg_distill_loss.item():.4f}"
-                    )
-                    print(
-                        f"  - Distill Active(%) : {distill_mask.item() * 100:.1f}% (Normal samples in batch)"
-                    )
-                    print(f"  - Total Distill Loss: {loss_distill.item():.4f}")
-                    print(f"  - Total Loss        : {total_loss.item():.4f}")
-
-                # ==================== 反向傳播與優化 ====================
+                # -------------------- 反向傳播與統計 --------------------
                 optimizer.zero_grad()
                 total_loss.backward()
                 optimizer.step()
 
-                # ==================== 視覺化 ====================
-                if i_batch % 100 == 0:
-                    visualize_predictions(
-                        teacher_model, teacher_seg_model, student_model,
-                        student_seg_model, sample_batched, device,
-                        os.path.join(save_root,
-                                     f"vis_epoch_{epoch}_batch_{i_batch}"))
-
-                if i_batch % 500 == 0:
-                    detailed_diagnostic_visualization(
-                        teacher_model, teacher_seg_model, student_model,
-                        student_seg_model, loss_focal, sample_batched, device,
-                        os.path.join(save_root,
-                                     f"diag_epoch_{epoch}_batch_{i_batch}"),
-                        epoch, i_batch)
-
-                # ==================== 累加損失統計 ====================
                 epoch_loss += total_loss.item()
-                epoch_seg_distill_loss += seg_distill_loss.item()
-                epoch_orig_seg_loss += segment_loss.item()
                 num_batches += 1
-                n_iter += 1
 
             # --- Epoch 結束處理 ---
             scheduler.step()
