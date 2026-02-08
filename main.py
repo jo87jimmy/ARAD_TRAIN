@@ -1,247 +1,247 @@
-import os
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision.utils import make_grid, save_image
-from torchvision import transforms as T
-from PIL import Image
-import numpy as np
-from sklearn.metrics import roc_auc_score
-from torch.utils.tensorboard import SummaryWriter
-import random  # 亂數控制
-import argparse  # 命令列參數處理
-import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
-from loss import FocalLoss, SSIM
-from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork
-from data_loader import MVTecDRAEMTrainDataset, MVTecDRAEMTestDataset
-import matplotlib.pyplot as plt
-import torchvision.transforms as transforms
-from datetime import datetime
-from loss import FocalLoss, SSIM
-import numpy as np
-from sklearn.metrics import roc_curve, auc, precision_recall_curve, precision_score, recall_score, f1_score, jaccard_score
+import os  # 導入 os 模組，用於與操作系統交互。
+import torch  # 導入 PyTorch 庫，這是深度學習的主要框架。
+import torch.nn as nn  # 導入 PyTorch 的神經網絡模組。
+import torch.optim as optim  # 導入 PyTorch 的優化器模組。
+from torch.utils.data import DataLoader  # 導入 DataLoader，用於批次加載數據。
+from torchvision.utils import make_grid, save_image  # 導入 torchvision 工具，用於生成網格圖像和保存圖像。
+from torchvision import transforms as T  # 導入 torchvision 的圖像轉換工具。
+from PIL import Image  # 導入 PIL 庫，用於圖像處理。
+import numpy as np  # 導入 numpy，用於數值計算。
+from sklearn.metrics import roc_auc_score  # 導入 ROC AUC 計算函數。
+from torch.utils.tensorboard import SummaryWriter  # 導入 TensorBoard 寫入器，用於可視化訓練過程。
+import random  # 導入 random 模組，用於生成隨機數。
+import argparse  # 導入 argparse，用於解析命令行參數。
+import torch.nn.functional as F  # 導入 PyTorch 的函數式接口。
+from sklearn.metrics import roc_auc_score  # 重複導入，保留原樣。
+from loss import FocalLoss, SSIM  # 從 loss 模組導入 FocalLoss 和 SSIM 損失函數。
+from model_unet import ReconstructiveSubNetwork, DiscriminativeSubNetwork  # 從 model_unet 導入子網絡模型。
+from data_loader import MVTecDRAEMTrainDataset, MVTecDRAEMTestDataset  # 從 data_loader 導入訓練和測試數據集類。
+import matplotlib.pyplot as plt  # 導入 matplotlib.pyplot 用於繪圖。
+import torchvision.transforms as transforms  # 重複導入 transforms。
+from datetime import datetime  # 導入 datetime 用於獲取時間。
+from loss import FocalLoss, SSIM  # 重複導入。
+import numpy as np  # 重複導入。
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, precision_score, recall_score, f1_score, jaccard_score  # 導入更多評估指標。
 
 
-def setup_seed(seed):
+def setup_seed(seed):  # 定義設置隨機種子的函數，用於保證實驗的可重複性。
     # 設定隨機種子，確保實驗可重現
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True  # 保證結果可重現
-    torch.backends.cudnn.benchmark = False  # 關閉自動最佳化搜尋
+    torch.manual_seed(seed)  # 設置 CPU 的隨機種子。
+    torch.cuda.manual_seed_all(seed)  # 設置所有 GPU 的隨機種子。
+    np.random.seed(seed)  # 設置 numpy 的隨機種子。
+    random.seed(seed)  # 設置 random 模組的隨機種子。
+    torch.backends.cudnn.deterministic = True  # 設置 cuDNN 為確定性模式，保證結果可重現。
+    torch.backends.cudnn.benchmark = False  # 關閉 cuDNN 的自動最佳化搜尋，避免不同硬件上結果不一致。
 
 
 # =======================
 # Utilities
 # =======================
-def get_available_gpu():
+def get_available_gpu():  # 定義獲取可用 GPU 的函數。
     """自動選擇記憶體使用率最低的GPU"""
-    if not torch.cuda.is_available():
-        return -1  # 沒有GPU可用
+    if not torch.cuda.is_available():  # 如果沒有 GPU 可用。
+        return -1  # 返回 -1，表示使用 CPU。
 
-    gpu_count = torch.cuda.device_count()
-    if gpu_count == 0:
-        return -1
+    gpu_count = torch.cuda.device_count()  # 獲取 GPU 數量。
+    if gpu_count == 0:  # 如果數量為 0。
+        return -1  # 返回 -1。
 
     # 檢查每個GPU的記憶體使用情況
-    gpu_memory = []
-    for i in range(gpu_count):
-        torch.cuda.set_device(i)
-        memory_allocated = torch.cuda.memory_allocated(i)
-        memory_reserved = torch.cuda.memory_reserved(i)
-        gpu_memory.append((i, memory_allocated, memory_reserved))
+    gpu_memory = []  # 初始化列表，存儲 GPU 內存信息。
+    for i in range(gpu_count):  # 遍歷每個 GPU。
+        torch.cuda.set_device(i)  # 設置當前設備。
+        memory_allocated = torch.cuda.memory_allocated(i)  # 獲取已分配內存。
+        memory_reserved = torch.cuda.memory_reserved(i)  # 獲取保留內存。
+        gpu_memory.append((i, memory_allocated, memory_reserved))  # 添加到列表。
 
     # 選擇記憶體使用最少的GPU
-    available_gpu = min(gpu_memory, key=lambda x: x[1])[0]
-    return available_gpu
+    available_gpu = min(gpu_memory, key=lambda x: x[1])[0]  # 根據已分配內存排序，選擇最小的那個 GPU ID。
+    return available_gpu  # 返回 GPU ID。
 
 
-def weights_init(m):
+def weights_init(m):  # 定義權重初始化函數。
     """ 卷積層權重 → 小亂數讓網路容易學習、梯度穩定
         BatchNorm權重 → 初始縮放 1 保持數值穩定，偏置 0 不改變均值"""
     # 取得模組的類別名稱，例如 'Conv2d', 'BatchNorm2d' 等
-    classname = m.__class__.__name__
+    classname = m.__class__.__name__  # 獲取類名。
 
     # 如果是卷積層 (Conv)
-    if classname.find('Conv') != -1:
+    if classname.find('Conv') != -1:  # 如果類名包含 'Conv'。
         # 權重初始化為均值 0、標準差 0.02 的高斯分布
         # 原因：這樣可以讓卷積層一開始輸出的特徵值分布均衡，避免梯度消失或梯度爆炸
-        m.weight.data.normal_(0.0, 0.02)
+        m.weight.data.normal_(0.0, 0.02)  # 使用正態分佈初始化權重。
 
     # 如果是批次正規化層 (BatchNorm)
-    elif classname.find('BatchNorm') != -1:
+    elif classname.find('BatchNorm') != -1:  # 如果類名包含 'BatchNorm'。
         # 權重初始化為均值 1、標準差 0.02 的高斯分布
         # 原因：BatchNorm 的權重 (gamma) 控制輸出縮放，初始化為 1 可以保持初始特徵分布不變
-        m.weight.data.normal_(1.0, 0.02)
+        m.weight.data.normal_(1.0, 0.02)  # 初始化權重為 1。
         # 偏置初始化為 0
         # 原因：偏置 (beta) 控制輸出偏移量，初始化為 0 可以保持輸出均值不偏移
-        m.bias.data.fill_(0)
+        m.bias.data.fill_(0)  # 初始化偏置為 0。
 
 
-def visualize_predictions(teacher_model, teacher_seg_model, student_model,
+def visualize_predictions(teacher_model, teacher_seg_model, student_model,  # 定義可視化預測結果的函數。
                           student_seg_model, batch, device, save_path):
     """
     視覺化教師模型和學生模型的預測結果對比
     """
-    teacher_model.eval()
-    student_model.eval()
-    with torch.no_grad():
-        input_image = batch["image"].to(device)
-        aug_image = batch["augmented_image"].to(device)
-        gt_mask = batch["anomaly_mask"].to(device)
+    teacher_model.eval()  # 將教師模型設置為評估模式。
+    student_model.eval()  # 將學生模型設置為評估模式。
+    with torch.no_grad():  # 禁用梯度計算。
+        input_image = batch["image"].to(device)  # 獲取輸入圖像並移動到設備。
+        aug_image = batch["augmented_image"].to(device)  # 獲取增強圖像並移動到設備。
+        gt_mask = batch["anomaly_mask"].to(device)  # 獲取異常掩碼並移動到設備。
 
         # 教師預測
-        teacher_recon = teacher_model(aug_image)
-        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)
-        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)
-        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)
+        teacher_recon = teacher_model(aug_image)  # 教師模型重建圖像。
+        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)  # 將重建圖像與增強圖像拼接。
+        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)  # 教師分割模型輸出。
+        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)  # 計算 softmax 概率。
 
         # 學生預測
-        student_recon = student_model(aug_image)
-        student_joined_in = torch.cat((student_recon, aug_image), dim=1)
-        student_seg_out_mask = student_seg_model(student_joined_in)
-        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
+        student_recon = student_model(aug_image)  # 學生模型重建圖像。
+        student_joined_in = torch.cat((student_recon, aug_image), dim=1)  # 將重建圖像與增強圖像拼接。
+        student_seg_out_mask = student_seg_model(student_joined_in)  # 學生分割模型輸出。
+        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)  # 計算 softmax 概率。
 
         # 轉換為 numpy 用於繪圖
-        input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)
-        aug_np = aug_image.cpu().numpy()[0].transpose(1, 2, 0)
-        gt_mask_np = gt_mask.cpu().numpy()[0, 0]  # 取第一個通道
+        input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)  # 轉換輸入圖像為 numpy 格式 (H, W, C)。
+        aug_np = aug_image.cpu().numpy()[0].transpose(1, 2, 0)  # 轉換增強圖像為 numpy 格式。
+        gt_mask_np = gt_mask.cpu().numpy()[0, 0]  # 取第一個通道的 Ground Truth 掩碼。
 
         # 處理分割結果
         teacher_seg_np = torch.softmax(teacher_seg_map,
-                                       dim=1)[0, 1].cpu().numpy()  # 異常類別概率
+                                       dim=1)[0, 1].cpu().numpy()  # 獲取教師模型預測的異常類別概率。
         student_seg_np = torch.softmax(student_seg_map,
-                                       dim=1)[0, 1].cpu().numpy()
+                                       dim=1)[0, 1].cpu().numpy()  # 獲取學生模型預測的異常類別概率。
 
         # 創建圖像
-        fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+        fig, axes = plt.subplots(2, 4, figsize=(20, 10))  # 創建 2x4 的子圖佈局。
 
         # 第一行：原始輸入與標註
-        axes[0, 0].imshow(input_np)  # 原始輸入影像，用於參考真實場景
-        axes[0, 0].set_title('Original Image')
-        axes[0, 0].axis('off')
-        axes[0, 1].imshow(aug_np)  # 增強後影像，實際輸入模型的資料
-        axes[0, 1].set_title('Augmented Image')
-        axes[0, 1].axis('off')
-        axes[0, 2].imshow(gt_mask_np, cmap='jet')  # Ground Truth 異常遮罩，作為標準答案
-        axes[0, 2].set_title('Ground Truth Mask')
-        axes[0, 2].axis('off')
-        axes[0, 3].axis('off')  # 空白
+        axes[0, 0].imshow(input_np)  # 顯示原始輸入影像。
+        axes[0, 0].set_title('Original Image')  # 設置標題。
+        axes[0, 0].axis('off')  # 關閉坐標軸。
+        axes[0, 1].imshow(aug_np)  # 顯示增強後影像。
+        axes[0, 1].set_title('Augmented Image')  # 設置標題。
+        axes[0, 1].axis('off')  # 關閉坐標軸。
+        axes[0, 2].imshow(gt_mask_np, cmap='jet')  # 顯示 Ground Truth 異常遮罩。
+        axes[0, 2].set_title('Ground Truth Mask')  # 設置標題。
+        axes[0, 2].axis('off')  # 關閉坐標軸。
+        axes[0, 3].axis('off')  # 第四個位置留白。
 
         # 第二行：模型預測與比較
         im1 = axes[1, 0].imshow(teacher_seg_np, cmap='jet', vmin=0,
-                                vmax=1)  # 教師模型的異常機率分佈，作為學生模型的學習目標
-        axes[1, 0].set_title('Teacher Segmentation')
-        axes[1, 0].axis('off')
-        plt.colorbar(im1, ax=axes[1, 0])
+                                vmax=1)  # 顯示教師模型的預測熱力圖。
+        axes[1, 0].set_title('Teacher Segmentation')  # 設置標題。
+        axes[1, 0].axis('off')  # 關閉坐標軸。
+        plt.colorbar(im1, ax=axes[1, 0])  # 添加顏色條。
 
         im2 = axes[1, 1].imshow(student_seg_np, cmap='jet', vmin=0,
-                                vmax=1)  # 學生模型的異常機率分佈，用於與教師模型做對比
-        axes[1, 1].set_title('Student Segmentation')
-        axes[1, 1].axis('off')
-        plt.colorbar(im2, ax=axes[1, 1])
+                                vmax=1)  # 顯示學生模型的預測熱力圖。
+        axes[1, 1].set_title('Student Segmentation')  # 設置標題。
+        axes[1, 1].axis('off')  # 關閉坐標軸。
+        plt.colorbar(im2, ax=axes[1, 1])  # 添加顏色條。
         # 差異圖
-        diff = np.abs(teacher_seg_np - student_seg_np)
+        diff = np.abs(teacher_seg_np - student_seg_np)  # 計算教師與學生預測的絕對差異。
         im3 = axes[1, 2].imshow(diff, cmap='hot', vmin=0,
-                                vmax=1)  # 教師與學生模型預測差異圖，顯示兩者在空間上的預測偏差
-        axes[1, 2].set_title('Teacher-Student Difference')
-        axes[1, 2].axis('off')
-        plt.colorbar(im3, ax=axes[1, 2])
+                                vmax=1)  # 顯示差異圖。
+        axes[1, 2].set_title('Teacher-Student Difference')  # 設置標題。
+        axes[1, 2].axis('off')  # 關閉坐標軸。
+        plt.colorbar(im3, ax=axes[1, 2])  # 添加顏色條。
         # 二值化對比
-        student_binary = (student_seg_np > 0.5).astype(np.float32)
+        student_binary = (student_seg_np > 0.5).astype(np.float32)  # 對學生預測進行二值化。
         im4 = axes[1, 3].imshow(student_binary,
-                                cmap='gray')  # 學生模型的二值化結果（閾值0.5），用於觀察最終異常判斷區域
-        axes[1, 3].set_title('Student Binary (>0.5)')
-        axes[1, 3].axis('off')
+                                cmap='gray')  # 顯示二值化結果。
+        axes[1, 3].set_title('Student Binary (>0.5)')  # 設置標題。
+        axes[1, 3].axis('off')  # 關閉坐標軸。
 
-        plt.tight_layout()
-        plt.savefig(save_path + '.png', dpi=150, bbox_inches='tight')
-        plt.close()
-        student_model.train()
-        print(f"✅ Visualization saved: {save_path}.png")
+        plt.tight_layout()  # 自動調整佈局。
+        plt.savefig(save_path + '.png', dpi=150, bbox_inches='tight')  # 保存圖像。
+        plt.close()  # 關閉圖像以釋放內存。
+        student_model.train()  # 將學生模型切換回訓練模式。
+        print(f"✅ Visualization saved: {save_path}.png")  # 打印保存路徑。
 
 
-def detailed_diagnostic_visualization(teacher_model, teacher_seg_model,
+def detailed_diagnostic_visualization(teacher_model, teacher_seg_model,  # 定義詳細診斷可視化的函數。
                                       student_model, student_seg_model,
                                       loss_focal, batch, device, save_path,
                                       epoch, i_batch):
     """
     更詳細的診斷視覺化，包含損失值和指標
     """
-    teacher_model.eval()
-    student_model.eval()
-    with torch.no_grad():
-        input_image = batch["image"].to(device)
-        aug_image = batch["augmented_image"].to(device)
-        gt_mask = batch["anomaly_mask"].to(device)
+    teacher_model.eval()  # 教師模型設為評估模式。
+    student_model.eval()  # 學生模型設為評估模式。
+    with torch.no_grad():  # 禁用梯度。
+        input_image = batch["image"].to(device)  # 獲取輸入數據。
+        aug_image = batch["augmented_image"].to(device)  # 獲取增強數據。
+        gt_mask = batch["anomaly_mask"].to(device)  # 獲取掩碼。
 
         # 獲取預測
         # 教師預測
-        teacher_recon = teacher_model(aug_image)
-        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)
-        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)
-        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)
+        teacher_recon = teacher_model(aug_image)  # 教師重建。
+        teacher_joined_in = torch.cat((teacher_recon, aug_image), dim=1)  # 教師拼接。
+        teacher_seg_out_mask = teacher_seg_model(teacher_joined_in)  # 教師分割。
+        teacher_seg_map = torch.softmax(teacher_seg_out_mask, dim=1)  # 教師概率。
 
         # 學生預測
-        student_recon = student_model(aug_image)
-        student_joined_in = torch.cat((student_recon, aug_image), dim=1)
-        student_seg_out_mask = student_seg_model(student_joined_in)
-        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)
+        student_recon = student_model(aug_image)  # 學生重建。
+        student_joined_in = torch.cat((student_recon, aug_image), dim=1)  # 學生拼接。
+        student_seg_out_mask = student_seg_model(student_joined_in)  # 學生分割。
+        student_seg_map = torch.softmax(student_seg_out_mask, dim=1)  # 學生概率。
 
         # 計算當前損失（僅用於顯示）
-        seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map).item()
-        student_seg_softmax = torch.softmax(student_seg_map, dim=1)
-        orig_seg_loss = loss_focal(student_seg_softmax, gt_mask).item()
+        seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map).item()  # 計算分割蒸餾損失。
+        student_seg_softmax = torch.softmax(student_seg_map, dim=1)  # 再次計算 softmax (重複操作，可優化)。
+        orig_seg_loss = loss_focal(student_seg_softmax, gt_mask).item()  # 計算原始分割損失。
 
         # 轉換為 numpy
-        input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)
-        aug_np = aug_image.cpu().numpy()[0].transpose(1, 2, 0)
-        gt_mask_np = gt_mask.cpu().numpy()[0, 0]
+        input_np = input_image.cpu().numpy()[0].transpose(1, 2, 0)  # 轉為 numpy。
+        aug_np = aug_image.cpu().numpy()[0].transpose(1, 2, 0)  # 轉為 numpy。
+        gt_mask_np = gt_mask.cpu().numpy()[0, 0]  # 轉為 numpy。
         teacher_seg_np = torch.softmax(teacher_seg_map,
-                                       dim=1)[0, 1].cpu().numpy()
+                                       dim=1)[0, 1].cpu().numpy()  # 教師預測轉為 numpy。
         student_seg_np = torch.softmax(student_seg_map,
-                                       dim=1)[0, 1].cpu().numpy()
+                                       dim=1)[0, 1].cpu().numpy()  # 學生預測轉為 numpy。
 
         # 創建診斷圖
-        fig, axes = plt.subplots(2, 5, figsize=(25, 10))
+        fig, axes = plt.subplots(2, 5, figsize=(25, 10))  # 創建 2x5 子圖。
 
         # 第一行：輸入與預測
-        axes[0, 0].imshow(input_np)  # 原始影像
-        axes[0, 0].set_title('Original Image')
+        axes[0, 0].imshow(input_np)  # 顯示原始影像。
+        axes[0, 0].set_title('Original Image')  # 設置標題。
         axes[0, 0].axis('off')
-        axes[0, 1].imshow(aug_np)  # 增強影像
+        axes[0, 1].imshow(aug_np)  # 顯示增強影像。
         axes[0, 1].set_title('Augmented Image')
         axes[0, 1].axis('off')
-        axes[0, 2].imshow(gt_mask_np, cmap='jet')  # Ground Truth 異常遮罩
+        axes[0, 2].imshow(gt_mask_np, cmap='jet')  # 顯示 Ground Truth 異常遮罩。
         axes[0, 2].set_title('GT Mask')
         axes[0, 2].axis('off')
 
         axes[0, 3].imshow(teacher_seg_np, cmap='jet', vmin=0,
-                          vmax=1)  # 教師模型預測，並顯示最大異常機率值，評估其敏感度
-        axes[0, 3].set_title(f'Teacher Seg\nMax: {teacher_seg_np.max():.3f}')
+                          vmax=1)  # 顯示教師模型預測。
+        axes[0, 3].set_title(f'Teacher Seg\nMax: {teacher_seg_np.max():.3f}')  # 顯示最大值。
         axes[0, 3].axis('off')
-        axes[0, 4].imshow(student_seg_np, cmap='jet', vmin=0, vmax=1)
-        axes[0, 4].set_title(f'Student Seg\nMax: {student_seg_np.max():.3f}')
-        axes[0, 4].axis('off')  # 學生模型預測，並顯示最大異常機率值，評估其偵測能力
+        axes[0, 4].imshow(student_seg_np, cmap='jet', vmin=0, vmax=1)  # 顯示學生模型預測。
+        axes[0, 4].set_title(f'Student Seg\nMax: {student_seg_np.max():.3f}')  # 顯示最大值。
+        axes[0, 4].axis('off')
 
         # 第二行：分析和差異
-        diff = np.abs(teacher_seg_np - student_seg_np)
-        axes[1, 0].imshow(diff, cmap='hot')  # 教師與學生的差異圖，並顯示平均差異值，用於衡量知識蒸餾效果
-        axes[1, 0].set_title(f'Difference\nAvg: {diff.mean():.3f}')
+        diff = np.abs(teacher_seg_np - student_seg_np)  # 計算差異。
+        axes[1, 0].imshow(diff, cmap='hot')  # 顯示差異圖。
+        axes[1, 0].set_title(f'Difference\nAvg: {diff.mean():.3f}')  # 顯示平均差異。
         axes[1, 0].axis('off')
         # 學生二值化
-        student_binary = (student_seg_np > 0.5).astype(np.float32)
+        student_binary = (student_seg_np > 0.5).astype(np.float32)  # 學生預測二值化。
         axes[1, 1].imshow(student_binary,
-                          cmap='gray')  # 學生模型的二值化結果，觀察其最終異常判斷區域
+                          cmap='gray')  # 顯示學生二值化結果。
         axes[1, 1].set_title('Student Binary\n(>0.5)')
         axes[1, 1].axis('off')
         # 教師二值化
-        teacher_binary = (teacher_seg_np > 0.5).astype(np.float32)
+        teacher_binary = (teacher_seg_np > 0.5).astype(np.float32)  # 教師預測二值化。
         axes[1, 2].imshow(teacher_binary,
-                          cmap='gray')  # 教師模型的二值化結果，作為學生模型的參考標準
+                          cmap='gray')  # 顯示教師二值化結果。
         axes[1, 2].set_title('Teacher Binary\n(>0.5)')
         axes[1, 2].axis('off')
 
@@ -253,7 +253,7 @@ def detailed_diagnostic_visualization(teacher_model, teacher_seg_model,
                         0.7, f'Epoch: {epoch}\nBatch: {i_batch}\n\n'
                         f'Seg Distill Loss: {seg_distill_loss:.4f}\n'
                         f'Orig Seg Loss: {orig_seg_loss:.4f}',
-                        fontsize=12)
+                        fontsize=12)  # 在圖上顯示文本信息。
         axes[1, 3].axis('off')
 
         # 統計信息
@@ -268,32 +268,32 @@ def detailed_diagnostic_visualization(teacher_model, teacher_seg_model,
                         f'Student Stats:\n'
                         f'Mean: {student_seg_np.mean():.3f}\n'
                         f'Std: {student_seg_np.std():.3f}',
-                        fontsize=12)
+                        fontsize=12)  # 顯示統計信息。
         axes[1, 4].axis('off')
 
-        plt.tight_layout()
+        plt.tight_layout()  # 調整佈局。
         plt.savefig(save_path + '_diagnostic.png',
                     dpi=150,
-                    bbox_inches='tight')
-        plt.close()
-        student_model.train()
-        print(f"✅ Diagnostic visualization saved: {save_path}_diagnostic.png")
+                    bbox_inches='tight')  # 保存圖片。
+        plt.close()  # 關閉圖片。
+        student_model.train()  # 恢復訓練模式。
+        print(f"✅ Diagnostic visualization saved: {save_path}_diagnostic.png")  # 打印保存信息。
 
 
 # =======================
 # Main Pipeline
 # =======================
-def main(obj_names, args):
-    setup_seed(111)  # 固定隨機種子
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    for obj_name in obj_names:
+def main(obj_names, args):  # 定義主函數。
+    setup_seed(111)  # 固定隨機種子。
+    device = "cuda" if torch.cuda.is_available() else "cpu"  # 設置設備。
+    for obj_name in obj_names:  # 遍歷每個目標類別。
         # Load teacher
-        recon_path = f'./DRAEM_checkpoints/DRAEM_seg_large_ae_large_0.0001_800_bs8_' + obj_name + '_'
-        checkpoint_path = recon_path + ".pckl"
+        recon_path = f'./DRAEM_checkpoints/DRAEM_seg_large_ae_large_0.0001_800_bs8_' + obj_name + '_'  # 構建教師重建模型路徑。
+        checkpoint_path = recon_path + ".pckl"  # 完整路徑。
         teacher_recon_ckpt = torch.load(checkpoint_path,
                                         map_location=device,
-                                        weights_only=True)
-        print("teacher_recon_ckpt keys:", teacher_recon_ckpt.keys())
+                                        weights_only=True)  # 加載教師重建權重。
+        print("teacher_recon_ckpt keys:", teacher_recon_ckpt.keys())  # 打印鍵值。
 
         # 假設是處理3通道的RGB圖像
         IMG_CHANNELS = 3
@@ -301,7 +301,7 @@ def main(obj_names, args):
         teacher_model = ReconstructiveSubNetwork(
             in_channels=IMG_CHANNELS,
             out_channels=IMG_CHANNELS,
-            base_width=128,  # 教師重建網路較寬
+            base_width=128,  # 教師重建網路較寬。
         ).to(device)
 
         # 現在使用修正後的 state_dict 載入，並使用 strict=True 來確保所有權重都正確載入
@@ -313,22 +313,22 @@ def main(obj_names, args):
         for p in teacher_model.parameters():
             p.requires_grad = False
 
-        seg_path = f'./DRAEM_checkpoints/DRAEM_seg_large_ae_large_0.0001_800_bs8_' + obj_name + '__seg'
-        checkpoint_seg_path = seg_path + ".pckl"
+        seg_path = f'./DRAEM_checkpoints/DRAEM_seg_large_ae_large_0.0001_800_bs8_' + obj_name + '__seg'  # 構建教師分割模型路徑。
+        checkpoint_seg_path = seg_path + ".pckl"  # 完整路徑。
         teacher_seg_ckpt = torch.load(checkpoint_seg_path,
                                       map_location=device,
-                                      weights_only=True)
-        print("teacher_seg_ckpt keys:", teacher_seg_ckpt.keys())
+                                      weights_only=True)  # 加載教師分割權重。
+        print("teacher_seg_ckpt keys:", teacher_seg_ckpt.keys())  # 打印鍵值。
 
-        IMG_SEG_CHANNELS = 6
-        IMG_SEG_CHANNELS_OUT = 2
+        IMG_SEG_CHANNELS = 6  # 分割輸入通道數（圖像+重建圖）。
+        IMG_SEG_CHANNELS_OUT = 2  # 輸出通道數（異常/正常）。
         teacher_seg_model = DiscriminativeSubNetwork(
             in_channels=IMG_SEG_CHANNELS,
             out_channels=IMG_SEG_CHANNELS_OUT,
-            base_channels=64,  # 教師重建網路較寬
+            base_channels=64,  # 教師分割網路較寬。
             out_features=False,
         ).to(device)
-        teacher_seg_model.load_state_dict(teacher_seg_ckpt, strict=True)
+        teacher_seg_model.load_state_dict(teacher_seg_ckpt, strict=True)  # 加載權重。
         # 將教師模型設為評估模式，停用 Dropout、BatchNorm 等訓練專用機制
         teacher_seg_model.eval()
 
@@ -337,7 +337,7 @@ def main(obj_names, args):
         student_model = ReconstructiveSubNetwork(
             in_channels=IMG_CHANNELS,
             out_channels=IMG_CHANNELS,
-            base_width=64,  # 學生重建網路較窄
+            base_width=64,  # 學生重建網路較窄。
         ).to(device)
 
         #初始化 卷積層和 BatchNorm 層的初始權重分布合理，幫助模型更快收斂
@@ -346,7 +346,7 @@ def main(obj_names, args):
         student_seg_model = DiscriminativeSubNetwork(
             in_channels=IMG_SEG_CHANNELS,
             out_channels=IMG_SEG_CHANNELS_OUT,
-            base_channels=32,  # 學生重建網路較窄
+            base_channels=32,  # 學生分割網路較窄。
             out_features=False,
         ).to(device)
 
@@ -373,11 +373,11 @@ def main(obj_names, args):
 
         # 定義損失函數
         loss_focal = FocalLoss()  #解決類別不平衡、強化模型對難分類樣本的學習。
-        loss_l2 = torch.nn.modules.loss.MSELoss()
-        loss_ssim = SSIM()
+        loss_l2 = torch.nn.modules.loss.MSELoss()  # L2 損失函數（均方誤差）。
+        loss_ssim = SSIM()  # SSIM 損失函數。
 
         path = f'./mvtec'  # 訓練資料路徑
-        path_dtd = f'./dtd/images/'
+        path_dtd = f'./dtd/images/'  # DTD 紋理數據路徑。
         # Load datasets
         # 載入訓練資料集，指定根目錄、類別、資料切分方式為 "train"，並將影像尺寸調整為 256x256
         #python train_DRAEM.py --gpu_id 0 --obj_id -1 --lr 0.0001 --bs 8 --epochs 700 --data_path ./datasets/mvtec/ --anomaly_source_path ./datasets/dtd/images/ --checkpoint_path ./checkpoints/ --log_path ./logs/
@@ -395,7 +395,7 @@ def main(obj_names, args):
         val_dataset = MVTecDRAEMTestDataset(
             root_dir=path,  # 傳遞 mvtec 的根目錄
             category_name=obj_name,  # 傳遞類別名稱
-            resize_shape=[256, 256])
+            resize_shape=[256, 256])  # 設置調整大小形狀。
         val_loader = DataLoader(val_dataset,
                                 batch_size=args.bs,
                                 shuffle=False,
@@ -417,200 +417,200 @@ def main(obj_names, args):
         n_iter = 0
 
         # --- 超參數定義 ---
-        lambda_l2 = 1.0
-        lambda_ssim = 0.5  # (D) 降低 SSIM 比例
-        lambda_segment = 2.0  # (A) 提高分割損失權重
-        lambda_recon_distill = 0.3  # (E) 分離蒸餾權重
-        lambda_seg_distill = 0.7
-        best_pixel_auroc = 0.0  # 初始化最佳 Pixel AUROC
+        lambda_l2 = 1.0  # L2 損失權重。
+        lambda_ssim = 0.5  # (D) 降低 SSIM 比例。
+        lambda_segment = 2.0  # (A) 提高分割損失權重。
+        lambda_recon_distill = 0.3  # (E) 分離蒸餾權重。
+        lambda_seg_distill = 0.7  # 分割蒸餾權重。
+        best_pixel_auroc = 0.0  # 初始化最佳 Pixel AUROC。
 
-        for epoch in range(args.epochs):
-            print("Epoch:", epoch)
+        for epoch in range(args.epochs):  # 訓練循環。
+            print("Epoch:", epoch)  # 打印 Epoch。
 
             # (B) 動態蒸餾權重：前 10 epoch 不啟用，之後線性增加
             if epoch < 10:
-                lambda_distill = 0.0
+                lambda_distill = 0.0  # 前 10 個 epoch 不使用蒸餾損失。
             else:
-                lambda_distill = 0.5 * (epoch / args.epochs)
+                lambda_distill = 0.5 * (epoch / args.epochs)  # 線性增加蒸餾權重。
 
-            epoch_loss = 0.0
-            epoch_seg_distill_loss = 0.0
-            epoch_orig_seg_loss = 0.0
-            num_batches = 0
+            epoch_loss = 0.0  # 初始化 epoch 損失。
+            epoch_seg_distill_loss = 0.0  # 初始化分割蒸餾損失。
+            epoch_orig_seg_loss = 0.0  # 初始化原始分割損失。
+            num_batches = 0  # 批次計數器。
 
-            for i_batch, sample_batched in enumerate(train_loader):
+            for i_batch, sample_batched in enumerate(train_loader):  # 批次循環。
                 # ==================== 數據加載 ====================
-                input_image = sample_batched["image"].to(device)
+                input_image = sample_batched["image"].to(device)  # 獲取輸入圖像。
                 ground_truth_mask = sample_batched["anomaly_mask"].to(
-                    device).float()
-                aug_gray_batch = sample_batched["augmented_image"].to(device)
+                    device).float()  # 獲取異常掩碼。
+                aug_gray_batch = sample_batched["augmented_image"].to(device)  # 獲取增強灰度圖（實際上是增強後的彩色圖）。
                 is_normal = sample_batched.get(
-                    "is_normal", torch.ones_like(ground_truth_mask)).bool()
+                    "is_normal", torch.ones_like(ground_truth_mask)).bool()  # 獲取是否正常樣本的標記。
 
                 # ==================== 教師網路前向 ====================
                 with torch.no_grad():
-                    teacher_recon = teacher_model(aug_gray_batch)
+                    teacher_recon = teacher_model(aug_gray_batch)  # 教師模型重建。
                     teacher_joined_in = torch.cat(
-                        (teacher_recon, aug_gray_batch), dim=1)
-                    teacher_out_mask = teacher_seg_model(teacher_joined_in)
-                    teacher_seg_map = torch.softmax(teacher_out_mask, dim=1)
+                        (teacher_recon, aug_gray_batch), dim=1)  # 拼接輸入。
+                    teacher_out_mask = teacher_seg_model(teacher_joined_in)  # 教師分割輸出。
+                    teacher_seg_map = torch.softmax(teacher_out_mask, dim=1)  # 教師分割概率。
 
                 # ==================== 學生網路前向 ====================
-                student_recon = student_model(aug_gray_batch)
+                student_recon = student_model(aug_gray_batch)  # 學生模型重建。
                 student_joined_in = torch.cat((student_recon, aug_gray_batch),
-                                              dim=1)
-                student_out_mask = student_seg_model(student_joined_in)
-                student_seg_map = torch.softmax(student_out_mask, dim=1)
+                                              dim=1)  # 拼接輸入。
+                student_out_mask = student_seg_model(student_joined_in)  # 學生分割輸出。
+                student_seg_map = torch.softmax(student_out_mask, dim=1)  # 學生分割概率。
 
                 # ==================== (C) 加權重建損失 ====================
                 # 將 L2、SSIM 對正常區域 (1 - mask) 加權
-                l2_map = (student_recon - input_image)**2
-                weighted_l2 = (l2_map * (1 - ground_truth_mask)).mean()
+                l2_map = (student_recon - input_image)**2  # 計算 L2 誤差圖。
+                weighted_l2 = (l2_map * (1 - ground_truth_mask)).mean()  # 僅對正常區域計算平均 L2 損失。
 
                 ssim_map = loss_ssim(student_recon, input_image, return_map=True) \
-                    if hasattr(loss_ssim, "return_map") else loss_ssim(student_recon, input_image)
-                if isinstance(ssim_map, torch.Tensor) and ssim_map.ndim > 0:
-                    weighted_ssim = (ssim_map * (1 - ground_truth_mask)).mean()
+                    if hasattr(loss_ssim, "return_map") else loss_ssim(student_recon, input_image) # 計算 SSIM 損失圖。
+                if isinstance(ssim_map, torch.Tensor) and ssim_map.ndim > 0:  # 如果返回的是張量且維度大於 0。
+                    weighted_ssim = (ssim_map * (1 - ground_truth_mask)).mean()  # 僅對正常區域計算平均 SSIM 損失。
                 else:
-                    weighted_ssim = ssim_map
+                    weighted_ssim = ssim_map  # 否則直接使用 SSIM 損失。
 
-                loss_recon = lambda_l2 * weighted_l2 + lambda_ssim * weighted_ssim
+                loss_recon = lambda_l2 * weighted_l2 + lambda_ssim * weighted_ssim  # 組合重建損失。
 
                 # ==================== (A) 分割損失 ====================
-                segment_loss = loss_focal(student_seg_map, ground_truth_mask)
-                loss_seg = lambda_segment * segment_loss
+                segment_loss = loss_focal(student_seg_map, ground_truth_mask)  # 計算 Focal Loss。
+                loss_seg = lambda_segment * segment_loss  # 加權分割損失。
 
                 # ==================== (E) 分離蒸餾損失 ====================
-                recon_distill_loss = F.mse_loss(student_recon, teacher_recon)
-                seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map)
+                recon_distill_loss = F.mse_loss(student_recon, teacher_recon)  # 計算重建蒸餾損失 (MSE)。
+                seg_distill_loss = F.mse_loss(student_seg_map, teacher_seg_map)  # 計算分割蒸餾損失 (MSE)。
                 distill_loss = (lambda_recon_distill * recon_distill_loss +
-                                lambda_seg_distill * seg_distill_loss)
+                                lambda_seg_distill * seg_distill_loss)  # 組合蒸餾損失。
 
                 # 蒸餾掩碼：僅對正常樣本啟用
-                distill_mask = is_normal.float().mean()
-                loss_distill = lambda_distill * distill_mask * distill_loss
+                distill_mask = is_normal.float().mean()  # 計算蒸餾掩碼權重 (只有正常樣本貢獻)。
+                loss_distill = lambda_distill * distill_mask * distill_loss  # 加權蒸餾損失。
 
                 # ==================== (B) Warmup 蒸餾控制 ====================
-                if epoch < 10:
-                    total_loss = loss_recon + loss_seg
-                else:
-                    total_loss = loss_recon + loss_seg + loss_distill
+                if epoch < 10:  # 如果在前 10 個 epoch。
+                    total_loss = loss_recon + loss_seg  # 總損失不包含蒸餾損失。
+                else:  # 否則。
+                    total_loss = loss_recon + loss_seg + loss_distill  # 總損失包含蒸餾損失。
 
                 # -------------------- 反向傳播與統計 --------------------
-                optimizer.zero_grad()
-                total_loss.backward()
-                optimizer.step()
+                optimizer.zero_grad()  # 清空梯度。
+                total_loss.backward()  # 反向傳播。
+                optimizer.step()  # 更新參數。
 
-                epoch_loss += total_loss.item()
-                num_batches += 1
+                epoch_loss += total_loss.item()  # 累加總損失。
+                num_batches += 1  # 增加批次計數。
 
             # --- Epoch 結束處理 ---
-            scheduler.step()
+            scheduler.step()  # 更新學習率。
 
             # 平均損失輸出
-            avg_total_loss = epoch_loss / num_batches
-            avg_orig_seg_loss = epoch_orig_seg_loss / num_batches
-            print("-" * 50)
-            print(f"Epoch {epoch} Summary:")
-            print(f"  - Average Total Loss    : {avg_total_loss:.6f}")
-            print(f"  - Average Seg Loss      : {avg_orig_seg_loss:.6f}")
-            print("-" * 50)
+            avg_total_loss = epoch_loss / num_batches  # 計算平均總損失。
+            avg_orig_seg_loss = epoch_orig_seg_loss / num_batches  # 計算平均原始分割損失。
+            print("-" * 50)  # 打印分隔線。
+            print(f"Epoch {epoch} Summary:")  # 打印 Epoch 總結。
+            print(f"  - Average Total Loss    : {avg_total_loss:.6f}")  # 打印平均總損失。
+            print(f"  - Average Seg Loss      : {avg_orig_seg_loss:.6f}")  # 打印平均分割損失。
+            print("-" * 50)  # 打印分隔線。
 
             # --- 驗證階段 (保持原程式) ---
-            if val_loader:
-                student_model.eval()
-                student_seg_model.eval()
-                all_pred_masks = []
-                all_gt_masks = []
+            if val_loader:  # 如果有驗證集。
+                student_model.eval()  # 學生模型設為評估模式。
+                student_seg_model.eval()  # 學生分割模型設為評估模式。
+                all_pred_masks = []  # 初始化預測掩碼列表。
+                all_gt_masks = []  # 初始化真實掩碼列表。
 
-                with torch.no_grad():
+                with torch.no_grad():  # 禁用梯度。
                     for i_batch_val, sample_batched_val in enumerate(
                             val_loader):
                         input_image_val = sample_batched_val["image"].to(
-                            device)
+                            device)  # 獲取驗證圖像。
                         ground_truth_mask_val = sample_batched_val[
-                            "anomaly_mask"].to(device).float()
+                            "anomaly_mask"].to(device).float()  # 獲取驗證掩碼。
 
-                        student_recon = student_model(input_image_val)
+                        student_recon = student_model(input_image_val)  # 學生重建。
                         student_joined_in = torch.cat(
-                            (student_recon, input_image_val), dim=1)
+                            (student_recon, input_image_val), dim=1)  # 拼接。
                         student_seg_out_mask = student_seg_model(
-                            student_joined_in)
+                            student_joined_in)  # 學生分割。
                         student_seg_map = torch.softmax(student_seg_out_mask,
-                                                        dim=1)
+                                                        dim=1)  # 學生概率。
                         student_seg_map_val = student_seg_map[:, 1:
-                                                              2, :, :]  # B,1,H,W
+                                                              2, :, :]  # B,1,H,W  # 取異常通道。
 
                         all_pred_masks.append(
-                            student_seg_map_val.cpu().numpy())
+                            student_seg_map_val.cpu().numpy())  # 添加預測結果。
                         all_gt_masks.append(
-                            ground_truth_mask_val.cpu().numpy())
+                            ground_truth_mask_val.cpu().numpy())  # 添加真實結果。
 
                 # === Flatten & compute AUROC / F1 / IoU ===
-                all_pred_masks = np.concatenate(all_pred_masks, axis=0)
-                all_gt_masks = np.concatenate(all_gt_masks, axis=0)
-                all_pred_masks_flat = all_pred_masks.flatten()
-                all_gt_masks_flat = all_gt_masks.flatten().astype(int)
+                all_pred_masks = np.concatenate(all_pred_masks, axis=0)  # 連接所有批次結果。
+                all_gt_masks = np.concatenate(all_gt_masks, axis=0)  # 連接所有批次真實值。
+                all_pred_masks_flat = all_pred_masks.flatten()  # 展平。
+                all_gt_masks_flat = all_gt_masks.flatten().astype(int)  # 展平並轉為整數。
 
                 try:
                     fpr, tpr, _ = roc_curve(all_gt_masks_flat,
-                                            all_pred_masks_flat)
-                    pixel_auroc = auc(fpr, tpr)
+                                            all_pred_masks_flat)  # 計算 ROC 曲線。
+                    pixel_auroc = auc(fpr, tpr)  # 計算 AUROC。
                 except ValueError:
-                    pixel_auroc = float('nan')
+                    pixel_auroc = float('nan')  # 處理異常。
 
                 try:
                     precision_curve, recall_curve, _ = precision_recall_curve(
-                        all_gt_masks_flat, all_pred_masks_flat)
-                    pixel_pr_auc = auc(recall_curve, precision_curve)
+                        all_gt_masks_flat, all_pred_masks_flat)  # 計算 PR 曲線。
+                    pixel_pr_auc = auc(recall_curve, precision_curve)  # 計算 PR-AUC。
                 except ValueError:
-                    pixel_pr_auc = float('nan')
+                    pixel_pr_auc = float('nan')  # 處理異常。
 
-                threshold = 0.5
+                threshold = 0.5  # 設置閾值。
                 binary_pred_masks_flat = (all_pred_masks_flat
-                                          > threshold).astype(int)
+                                          > threshold).astype(int)  # 二值化預測。
 
                 pixel_precision = precision_score(all_gt_masks_flat,
                                                   binary_pred_masks_flat,
-                                                  zero_division=0)
+                                                  zero_division=0)  # 計算精確率。
                 pixel_recall = recall_score(all_gt_masks_flat,
                                             binary_pred_masks_flat,
-                                            zero_division=0)
+                                            zero_division=0)  # 計算召回率。
                 pixel_f1 = f1_score(all_gt_masks_flat,
                                     binary_pred_masks_flat,
-                                    zero_division=0)
+                                    zero_division=0)  # 計算 F1 分數。
                 pixel_iou = jaccard_score(all_gt_masks_flat,
                                           binary_pred_masks_flat,
-                                          zero_division=0)
+                                          zero_division=0)  # 計算 IoU。
 
-                print("-" * 50)
-                print(f"Epoch {epoch} Anomaly Detection Metrics:")
-                print(f"  - Pixel-level AUROC   : {pixel_auroc:.4f}")
-                print(f"  - Pixel-level PR-AUC  : {pixel_pr_auc:.4f}")
-                print(f"  - Pixel-level Precision: {pixel_precision:.4f}")
-                print(f"  - Pixel-level Recall  : {pixel_recall:.4f}")
-                print(f"  - Pixel-level F1 Score: {pixel_f1:.4f}")
-                print(f"  - Pixel-level IoU     : {pixel_iou:.4f}")
-                print("-" * 50)
+                print("-" * 50)  # 打印分隔線。
+                print(f"Epoch {epoch} Anomaly Detection Metrics:")  # 打印 Epoch 指標。
+                print(f"  - Pixel-level AUROC   : {pixel_auroc:.4f}")  # 打印 AUROC。
+                print(f"  - Pixel-level PR-AUC  : {pixel_pr_auc:.4f}")  # 打印 PR-AUC。
+                print(f"  - Pixel-level Precision: {pixel_precision:.4f}")  # 打印 Precision。
+                print(f"  - Pixel-level Recall  : {pixel_recall:.4f}")  # 打印 Recall。
+                print(f"  - Pixel-level F1 Score: {pixel_f1:.4f}")  # 打印 F1 Score。
+                print(f"  - Pixel-level IoU     : {pixel_iou:.4f}")  # 打印 IoU。
+                print("-" * 50)  # 打印分隔線。
 
-                student_model.train()
-                student_seg_model.train()
+                student_model.train()  # 學生模型恢復訓練模式。
+                student_seg_model.train()  # 學生分割模型恢復訓練模式。
 
                 # --- 儲存最佳模型 ---
                 if not np.isnan(
-                        pixel_auroc) and pixel_auroc > best_pixel_auroc:
-                    best_pixel_auroc = pixel_auroc
+                        pixel_auroc) and pixel_auroc > best_pixel_auroc:  # 如果當前 AUROC 是最好的。
+                    best_pixel_auroc = pixel_auroc  # 更新最佳 AUROC。
                     save_path = os.path.join(checkpoint_dir,
-                                             f"{obj_name}_best_recon.pckl")
+                                             f"{obj_name}_best_recon.pckl")  # 構建保存路徑。
                     save_seg_path = os.path.join(checkpoint_dir,
-                                                 f"{obj_name}_best_seg.pckl")
-                    torch.save(student_model.state_dict(), save_path)
-                    torch.save(student_seg_model.state_dict(), save_seg_path)
+                                                 f"{obj_name}_best_seg.pckl")  # 構建保存路徑。
+                    torch.save(student_model.state_dict(), save_path)  # 保存學生模型權重。
+                    torch.save(student_seg_model.state_dict(), save_seg_path)  # 保存學生分割模型權重。
                     print(
                         f"✅ New best model saved at epoch {epoch} (Pixel AUROC={best_pixel_auroc:.4f})"
-                    )
+                    )  # 打印保存信息。
 
-        torch.cuda.empty_cache()
+        torch.cuda.empty_cache()  # 清空 CUDA 緩存。
 
 
 # =======================
@@ -623,44 +623,44 @@ if __name__ == "__main__":
     --gpu_id  0：使用GPU 0（原有行為）
     """
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--obj_id', action='store', type=int, required=True)
-    parser.add_argument('--epochs', default=25, type=int)
-    parser.add_argument('--bs', action='store', type=int, required=True)
-    parser.add_argument('--lr', action='store', type=float, required=True)
+    parser = argparse.ArgumentParser()  # 創建參數解析器。
+    parser.add_argument('--obj_id', action='store', type=int, required=True)  # 添加 obj_id 參數。
+    parser.add_argument('--epochs', default=25, type=int)  # 添加 epochs 參數。
+    parser.add_argument('--bs', action='store', type=int, required=True)  # 添加 batch size 參數。
+    parser.add_argument('--lr', action='store', type=float, required=True)  # 添加 learning rate 參數。
     parser.add_argument('--gpu_id',
                         action='store',
                         type=int,
                         default=-2,
                         required=False,
-                        help='GPU ID (-2: auto-select, -1: CPU)')
-    args = parser.parse_args()
+                        help='GPU ID (-2: auto-select, -1: CPU)')  # 添加 gpu_id 參數。
+    args = parser.parse_args()  # 解析參數。
 
     # 自動選擇GPU
     if args.gpu_id == -2:  # 自動選擇模式
-        args.gpu_id = get_available_gpu()
-        print(f"自動選擇 GPU: {args.gpu_id}")
+        args.gpu_id = get_available_gpu()  # 獲取可用 GPU。
+        print(f"自動選擇 GPU: {args.gpu_id}")  # 打印選擇結果。
 
-    obj_batch = [['capsule'], ['bottle'], ['carpet'], ['leather'], ['pill'],
+    obj_batch = [['capsule'], ['bottle'], ['carpet'], ['leather'], ['pill'],  # 定義目標類別列表。
                  ['transistor'], ['tile'], ['cable'], ['zipper'],
                  ['toothbrush'], ['metal_nut'], ['hazelnut'], ['screw'],
                  ['grid'], ['wood']]
 
-    if int(args.obj_id) == -1:
+    if int(args.obj_id) == -1:  # 如果 obj_id 為 -1，選擇所有類別。
         obj_list = [
             'capsule', 'bottle', 'carpet', 'leather', 'pill', 'transistor',
             'tile', 'cable', 'zipper', 'toothbrush', 'metal_nut', 'hazelnut',
             'screw', 'grid', 'wood'
         ]
         picked_classes = obj_list
-    else:
+    else:  # 否則選擇指定類別。
         picked_classes = obj_batch[int(args.obj_id)]
 
     # 根據選擇的GPU執行
-    if args.gpu_id == -1:
+    if args.gpu_id == -1:  # 如果使用 CPU。
         # 使用CPU
-        main(picked_classes, args)
+        main(picked_classes, args)  # 執行主函數。
     else:
         # 使用GPU
-        with torch.cuda.device(args.gpu_id):
-            main(picked_classes, args)
+        with torch.cuda.device(args.gpu_id):  # 設置 CUDA 設備上下文。
+            main(picked_classes, args)  # 執行主函數。
