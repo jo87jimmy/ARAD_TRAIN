@@ -6,18 +6,16 @@ from math import exp  # 從 math 模組導入 exp，用於數學指數運算。
 
 class FocalLoss(nn.Module):  # 定義 FocalLoss 類，繼承自 nn.Module。
     """
-    copy from: https://github.com/Hsuxu/Loss_ToolBox-PyTorch/blob/master/FocalLoss/FocalLoss.py
-    This is a implementation of Focal Loss with smooth label cross entropy supported which is proposed in
-    'Focal Loss for Dense Object Detection. (https://arxiv.org/abs/1708.02002)'
-        Focal_Loss= -1*alpha*(1-pt)*log(pt)
-    :param alpha: (tensor) 3D or 4D the scalar factor for this criterion
-    :param gamma: (float,double) gamma > 0 reduces the relative loss for well-classified examples (p>0.5) putting more
-                    focus on hard misclassified example
-    :param smooth: (float,double) smooth value when cross entropy
-    :param balance_index: (int) balance class index, should be specific when alpha is float
-    :param size_average: (bool, optional) By default, the losses are averaged over each loss element in the batch.
+        複製自：https://github.com/Hsuxu/Loss_ToolBox-PyTorch/blob/master/FocalLoss/FocalLoss.py
+        這是 Focal Loss 的實現，支持平滑標籤交叉熵，該實現由以下論文提出：
+        'Focal Loss for Dense Object Detection. (https://arxiv.org/abs/1708.02002)'
+        Focal_Loss = -1 * alpha * (1 - pt) * log(pt)
+        :param alpha: (tensor) 3D 或 4D 此準則的標量因子
+        :param gamma: (float, double) gamma > 0 會降低分類良好的樣本 (p > 0.5) 的相對損失，從而更關注難以分類的樣本
+        :param smooth: (float, double) 交叉熵的平滑值
+        :param balance_index: (int) 平衡類別索引，當 alpha 為浮點數時應明確指定
+        :param size_average: (bool，可選) 預設情況下，損失值在批次中的每個損失元素上取平均值。
     """
-
     def __init__(self, apply_nonlin=None, alpha=None, gamma=2, balance_index=0, smooth=1e-5, size_average=True):  # 初始化函數。
         super(FocalLoss, self).__init__()  # 調用父類構造函數。
         self.apply_nonlin = apply_nonlin  # 保存可選的非線性變換函數（如 softmax）。

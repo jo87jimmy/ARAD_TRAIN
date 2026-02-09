@@ -373,7 +373,7 @@ def main(obj_names, args):  # 定義主函數。
 
         # 定義損失函數
         loss_focal = FocalLoss()  #解決類別不平衡、強化模型對難分類樣本的學習。
-        loss_l2 = torch.nn.modules.loss.MSELoss()  # L2 損失函數（均方誤差）。
+        # loss_l2 = torch.nn.modules.loss.MSELoss()  # L2 損失函數（均方誤差）。
         loss_ssim = SSIM()  # SSIM 損失函數。
 
         path = f'./mvtec'  # 訓練資料路徑
@@ -414,7 +414,7 @@ def main(obj_names, args):  # 定義主函數。
         # 如果檢查點資料夾不存在，則建立該資料夾（exist_ok=True 表示若已存在則不報錯）
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-        n_iter = 0
+        # n_iter = 0
 
         # --- 超參數定義 ---
         lambda_l2 = 1.0  # L2 損失權重。
