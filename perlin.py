@@ -1,16 +1,51 @@
-import torch  # 導入 PyTorch 庫，這是深度學習的主要框架。
+"""
+Perlin 噪聲生成模組。
+
+本模組提供了生成 2D Perlin 噪聲和分形噪聲 (Fractal Noise) 的功能。
+支援 NumPy 和 PyTorch 兩種實現方式，可用於生成紋理、地形高度圖或數據增強。
+"""
+
 import math  # 導入 math 模組，用於數學運算。
+import torch  # 導入 PyTorch 庫，這是深度學習的主要框架。
 import numpy as np  # 導入 numpy 並命名為 np，用於數值計算。
 
 
-def lerp_np(x, y, w):  # 定義線性插值函數 (NumPy 版本)。
+def lerp_np(x, y, w):
+    """
+    NumPy 版本的線性插值函數 (Linear Interpolation)。
+
+    該函數計算 x 到 y 之間的插值，權重由 w 決定。
+    公式為: x + w * (y - x)。
+
+    Args:
+        x: 起始值 (可以是數值或 NumPy 數組)。
+        y: 結束值 (可以是數值或 NumPy 數組)。
+        w: 權重值 (通常在 0.0 到 1.0 之間)。
+
+    Returns:
+        插值後的結果。
+    """
     fin_out = (y - x) * w + x  # 計算插值結果：x + w * (y - x)。
     return fin_out  # 返回結果。
 
 
-def generate_fractal_noise_2d(
-    shape, res, octaves=1, persistence=0.5
-):  # 定義生成 2D 分形噪聲的函數。
+def generate_fractal_noise_2d(shape, res, octaves=1, persistence=0.5):
+    """
+    生成 2D 分形噪聲 (Fractal Noise)。
+
+    這是一個更高級的噪聲生成函數，它通過疊加多個不同頻率和振幅的 Perlin 噪聲層（倍頻程）來創建更自然、更複雜的紋理。
+
+    Args:
+        shape (tuple): 輸出噪聲數組的形狀 (height, width)。
+        res (tuple): 基礎頻率的網格解析度 (res_x, res_y)。
+        octaves (int, optional): 倍頻程的數量。默認為 1。
+            值越高，細節越多，計算量也越大。
+        persistence (float, optional): 持續度。默認為 0.5。
+            決定了每個後續倍頻程的振幅衰減速度。
+
+    Returns:
+        numpy.ndarray: 生成的 2D 分形噪聲數組。
+    """
     noise = np.zeros(shape)  # 初始化噪聲數組為全零。
     frequency = 1  # 初始頻率為 1。
     amplitude = 1  # 初始振幅為 1。
@@ -23,7 +58,21 @@ def generate_fractal_noise_2d(
     return noise  # 返回最終的分形噪聲。
 
 
-def generate_perlin_noise_2d(shape, res):  # 定義生成 2D Perlin 噪聲的函數。
+def generate_perlin_noise_2d(shape, res):
+    """
+    生成 2D Perlin 噪聲。
+
+    基礎的 Perlin 噪聲生成函數，使用 NumPy 實現。
+    它生成平滑的連續隨機噪聲，通常用於紋理生成或自然現象模擬。
+
+    Args:
+        shape (tuple): 輸出噪聲數組的形狀 (height, width)。
+        res (tuple): 網格解析度 (res_x, res_y)，決定了噪聲的頻率。
+
+    Returns:
+        numpy.ndarray: 生成的 2D Perlin 噪聲數組。
+    """
+
     def f(t):  # 定義緩入緩出函數 (Fade function)。
         return 6 * t**5 - 15 * t**4 + 10 * t**3  # 改進的平滑函數。
 
@@ -59,9 +108,20 @@ def generate_perlin_noise_2d(shape, res):  # 定義生成 2D Perlin 噪聲的函
     )  # 在 y 方向插值並返回結果。
 
 
-def rand_perlin_2d_np(
-    shape, res, fade=lambda t: 6 * t**5 - 15 * t**4 + 10 * t**3
-):  # 定義隨機 2D Perlin 噪聲函數 (NumPy 版本)。
+def rand_perlin_2d_np(shape, res, fade=lambda t: 6 * t**5 - 15 * t**4 + 10 * t**3):
+    """
+    生成隨機 2D Perlin 噪聲 (NumPy 版本)。
+
+    使用 NumPy 實現的隨機 Perlin 噪聲生成器。此函數包含內部輔助函數來處理梯度平鋪和點積計算。
+
+    Args:
+        shape (tuple): 輸出噪聲數組的形狀 (height, width)。
+        res (tuple): 網格解析度 (res_x, res_y)。
+        fade (function, optional): 緩入緩出函數。默認為 6t^5 - 15t^4 + 10t^3。
+
+    Returns:
+        numpy.ndarray: 生成的 2D Perlin 噪聲數組。
+    """
     delta = (res[0] / shape[0], res[1] / shape[1])  # 計算步長。
     d = (shape[0] // res[0], shape[1] // res[1])  # 計算單元大小。
     grid = (
@@ -104,9 +164,21 @@ def rand_perlin_2d_np(
     )  # 雙線性插值並返回。
 
 
-def rand_perlin_2d(
-    shape, res, fade=lambda t: 6 * t**5 - 15 * t**4 + 10 * t**3
-):  # 定義隨機 2D Perlin 噪聲函數 (PyTorch 版本)。
+def rand_perlin_2d(shape, res, fade=lambda t: 6 * t**5 - 15 * t**4 + 10 * t**3):
+    """
+    生成隨機 2D Perlin 噪聲 (PyTorch 版本)。
+
+    使用 PyTorch 實現的隨機 Perlin 噪聲生成器。
+    此函數利用 PyTorch 的張量操作來生成噪聲，適合在 GPU 上運行或與深度學習模型集成。
+
+    Args:
+        shape (tuple): 輸出噪聲張量的形狀 (height, width)。
+        res (tuple): 網格解析度 (res_x, res_y)。
+        fade (function, optional): 緩入緩出函數。默認為 6t^5 - 15t^4 + 10t^3。
+
+    Returns:
+        torch.Tensor: 生成的 2D Perlin 噪聲張量。
+    """
     delta = (res[0] / shape[0], res[1] / shape[1])  # 計算步長。
     d = (shape[0] // res[0], shape[1] // res[1])  # 計算單元大小。
 
@@ -156,9 +228,22 @@ def rand_perlin_2d(
     )  # 雙線性插值並返回。
 
 
-def rand_perlin_2d_octaves(
-    shape, res, octaves=1, persistence=0.5
-):  # 定義帶倍頻程的 Perlin 噪聲生成函數 (PyTorch 版本)。
+def rand_perlin_2d_octaves(shape, res, octaves=1, persistence=0.5):
+    """
+    生成 2D 分形噪聲 (PyTorch 版本)。
+
+    通過疊加多個倍頻程的 Perlin 噪聲來創建更複雜的紋理。
+    此函數是 generate_fractal_noise_2d 的 PyTorch 實現。
+
+    Args:
+        shape (tuple): 輸出噪聲張量的形狀 (height, width)。
+        res (tuple): 基礎網格解析度 (res_x, res_y)。
+        octaves (int, optional): 倍頻程的數量。默認為 1。
+        persistence (float, optional): 持續度，決定振幅衰減。默認為 0.5。
+
+    Returns:
+        torch.Tensor: 生成的 2D 分形噪聲張量。
+    """
     noise = torch.zeros(shape)  # 初始化噪聲。
     frequency = 1  # 初始頻率。
     amplitude = 1  # 初始振幅。

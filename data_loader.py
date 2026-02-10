@@ -1,20 +1,33 @@
+"""
+MVTec DRAEM 數據集加載器模塊。
+
+- 數據集加載: 處理 MVTec DRAEM 數據集，支持正常和異常樣本的加載。
+- 數據增強: 應用多種數據增強技術，包括 Perlin 噪聲、顏色抖動、模糊等。
+- 數據預處理: 使用 torchvision.transforms 進行圖像和掩碼的調整及歸一化。
+- 數據加載: 提供 DataLoader 實例以供模型訓練和評估使用。
+"""
+
 import os  # 導入 os 模組，用於與操作系統進行交互，例如路徑操作。
+import glob  # 導入 glob 模組，用於查找符合特定規則的文件路徑名。
 import numpy as np  # 導入 numpy 並命名為 np，用於數值計算和矩陣操作。
 from torch.utils.data import (
     Dataset,
 )  # 從 PyTorch 導入 Dataset 類，這是自定義數據集的父類。
 import torch  # 導入 PyTorch 庫，這是深度學習的主要框架。
 import cv2  # 導入 OpenCV 庫，用於圖像處理。
-import glob  # 導入 glob 模組，用於查找符合特定規則的文件路徑名。
 import imgaug.augmenters as iaa  # 導入 imgaug 的增強器模組，用於圖像數據增強。
 from perlin import (
     rand_perlin_2d_np,
 )  # 從 perlin 模組導入 rand_perlin_2d_np 函數，用於生成 2D Perlin 噪聲。
 
 
-class MVTecDRAEM_Test_Visual_Dataset(
-    Dataset
-):  # 定義測試可視化數據集類，繼承自 Dataset。
+class MVTecDRAEM_Test_Visual_Dataset(Dataset):
+    """
+    MVTec DRAEM 測試可視化數據集類。
+
+    此類繼承自 Dataset，專門用於測試階段的可視化任務。
+    它可以加載測試圖像及其對應的異常掩碼（如果存在），並進行預處理以供模型推論或展示使用。
+    """
 
     def __init__(
         self, root_dir, resize_shape=None
@@ -28,9 +41,22 @@ class MVTecDRAEM_Test_Visual_Dataset(
     def __len__(self):  # 定義 __len__ 方法，返回數據集的大小。
         return len(self.images)  # 返回圖像列表的長度。
 
-    def transform_image(
-        self, image_path, mask_path
-    ):  # 定義圖像轉換方法，處理圖像和掩碼。
+    def transform_image(self, image_path, mask_path):
+        """
+        處理並轉換單個圖像及其對應的掩碼。
+
+        讀取圖像和掩碼文件，調整大小，歸一化，並轉換為 PyTorch 兼容的格式 (C, H, W)。
+        如果未提供掩碼路徑，則生成全零掩碼。
+
+        Args:
+            image_path (str): 圖像文件的路徑。
+            mask_path (str or None): 掩碼文件的路徑。如果是 None，表示正常樣本。
+
+        Returns:
+            Tuple[np.ndarray, np.ndarray]:
+                - image: 處理後的圖像張量，形狀為 (3, H, W)。
+                - mask: 處理後的掩碼張量，形狀為 (1, H, W)。
+        """
         image = cv2.imread(
             image_path, cv2.IMREAD_COLOR
         )  # 使用 OpenCV 讀取圖像，保持彩色模式。
@@ -115,6 +141,13 @@ class MVTecDRAEM_Test_Visual_Dataset(
 
 
 class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAEM 模型訓練。
+    """
+    MVTec DRAEM 訓練數據集類。
+
+    此類用於加載訓練圖像，並通過動態合成異常來生成訓練樣本。
+    它使用 Perlin 噪聲和各種圖像增強技術將異常源圖像融合到正常圖像中，
+    以模擬各種類型的缺陷。
+    """
 
     def __init__(
         self, root_dir, anomaly_source_path, resize_shape=None
@@ -160,6 +193,15 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
         return len(self.image_paths)  # 返回圖像數量。
 
     def randAugmenter(self):  # 定義隨機選擇增強器的方法。
+        """
+        隨機選擇並組合圖像增強器。
+
+        從預定義的增強器列表中隨機選擇 3 個不同的增強器，
+        並將它們組合成一個 Sequential 增強器序列。
+
+        Returns:
+            imgaug.augmenters.Sequential: 組合後的增強器序列。
+        """
         aug_ind = np.random.choice(
             np.arange(len(self.augmenters)),  # 從增強器列表中隨機選擇索引。
             3,  # 選擇 3 個。
@@ -174,7 +216,24 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
         )
         return aug  # 返回組合後的增強器序列。
 
-    def augment_image(self, image, anomaly_source_path):  # 定義圖像增強及異常合成方法。
+    def augment_image(self, image, anomaly_source_path):
+        """
+        對圖像進行數據增強並合成異常。
+
+        此方法結合了隨機圖像增強、Perlin 噪聲生成的掩碼以及異常源圖像，
+        將異常特徵融合到輸入圖像中，以模擬真實的缺陷場景。
+        它還會隨機決定是否生成無異常的樣本（50% 機率）。
+
+        Args:
+            image (numpy.ndarray): 輸入的原始圖像，通常已歸一化。
+            anomaly_source_path (str): 用於合成異常的源圖像路徑（通常是紋理或結構圖像）。
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+                - augmented_image: 合成異常後的增強圖像（或原始圖像）。
+                - msk: 對應的異常掩碼，表示異常區域的位置。
+                - has_anomaly: 異常標籤，1.0 表示有異常，0.0 表示無異常。
+        """
         aug = self.randAugmenter()  # 獲取隨機增強器。
         perlin_scale = 6  # 設置 Perlin 噪聲的最大尺度。
         min_perlin_scale = 0  # 設置 Perlin 噪聲的最小尺度。
@@ -244,7 +303,24 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
                 np.array([has_anomaly], dtype=np.float32),  # 返回增強圖像、掩碼和標籤。
             )
 
-    def transform_image(self, image_path, anomaly_source_path):  # 定義圖像轉換主流程。
+    def transform_image(self, image_path, anomaly_source_path):
+        """
+        讀取並處理圖像，以及生成合成異常。
+
+        此方法讀取輸入圖像，調整大小，並以一定機率對其進行旋轉增強。
+        接著，調用 augment_image 方法將異常源圖像融合到輸入圖像中，生成訓練對。
+
+        Args:
+            image_path (str): 訓練圖像的路徑。
+            anomaly_source_path (str): 用於合成異常的源圖像路徑。
+
+        Returns:
+            Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]:
+                - image: 預處理後的原始圖像 (C, H, W)。
+                - augmented_image: 合成異常後的圖像 (C, H, W)。
+                - anomaly_mask: 異常掩碼 (C, H, W)。
+                - has_anomaly: 是否包含異常的標籤 (1.0 或 0.0)。
+        """
         image = cv2.imread(image_path)  # 讀取圖像。
         image = cv2.resize(
             image, dsize=(self.resize_shape[1], self.resize_shape[0])  # 調整圖像大小。
@@ -299,7 +375,14 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
         return sample  # 返回樣本。
 
 
-class MVTecDRAEMTestDataset(Dataset):  # 定義測試數據集類。
+class MVTecDRAEMTestDataset(Dataset):
+    """
+    MVTec DRAEM 測試數據集類。
+
+    此類用於加載 MVTec 數據集的測試圖像及其對應的 Ground Truth 異常掩碼。
+    它遍歷測試目錄中的所有圖像（包括正常和異常樣本），並根據目錄結構加載相應的標籤和掩碼。
+    主要用於模型評估階段，計算指標如 AUROC, AUPRO 等。
+    """  # 定義測試數據集類。
 
     def __init__(self, root_dir, category_name, resize_shape=None):  # 初始化函數。
         """

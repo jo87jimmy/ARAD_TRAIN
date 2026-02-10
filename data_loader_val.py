@@ -1,22 +1,52 @@
+"""
+MVTec AD 數據集加載模組
+
+此模組定義了 `MVTecDataset` 類，用於加載 MVTec AD 自定義數據集。
+它處理圖像讀取、預處理（調整大小、轉換為張量）以及標籤和掩碼的生成。
+此模組還負責創建訓練和驗證數據加載器 (`train_loader`, `val_loader`)。
+
+主要功能：
+- MVTecDataset: 自定義 PyTorch Dataset 類。
+- 數據預處理: 使用 torchvision.transforms 進行圖像和掩碼的調整及歸一化。
+- 數據加載: 提供 DataLoader 實例以供模型訓練和評估使用。
+"""
+
+import os  # 導入 os 模組，用於與操作系統交互，例如路徑操作。
+
 import torch  # 導入 PyTorch 庫，這是深度學習的主要框架。
 from torch.utils.data import (
     DataLoader,
-)  # 從 PyTorch 導入 DataLoader，用於批次加載數據並進行並行處理。
+    Dataset,
+)  # 從 PyTorch 導入 DataLoader 和 Dataset，用於批次加載數據和定義數據集。
 from torchvision import (
     transforms as T,
 )  # 導入 torchvision.transforms 並重命名為 T，用於圖像預處理和增強。
-
-# === MVTec Dataset ===
-import os  # 導入 os 模組，用於與操作系統交互，例如路徑操作。
 from PIL import Image  # 從 PIL (Pillow) 導入 Image，用於圖像加載和處理。
-from torch.utils.data import (
-    Dataset,
-)  # 從 PyTorch 導入 Dataset 類，這是自定義數據集的基類。
 
 
-class MVTecDataset(
-    Dataset
-):  # 定義 MVTecDataset 類，繼承自 Dataset，用於加載 MVTec AD 數據集。
+class MVTecDataset(Dataset):
+    """
+    MVTec AD 數據集類，繼承自 torch.utils.data.Dataset。
+
+    用於加載 MVTec AD (Anomaly Detection) 數據集，支持訓練集和測試集的讀取。
+    對於測試集中的異常樣本，會同時加載對應的像素級標註掩碼 (Ground Truth Mask)。
+
+    Args:
+        root (str): 數據集根目錄路徑。
+        category (str): 目標物體類別，例如 'bottle', 'cable' 等。預設為 'bottle'。
+        split (str): 數據分割類型，'train' 用於訓練集，'test' 用於測試集。預設為 'train'。
+        resize (int): 圖像調整大小的尺寸 (寬和高)。預設為 256。
+
+    Attributes:
+        img_dir (str): 圖像文件所在的目錄路徑。
+        gt_dir (str): Ground Truth 掩碼所在的目錄路徑。
+        data (list): 存儲所有圖像文件路徑的列表。
+        labels (list): 存儲所有圖像對應標籤的列表 (0: 正常, 1: 異常)。
+        masks (list): 存儲所有圖像對應掩碼路徑的列表 (正常樣本為 None)。
+        transform (torchvision.transforms.Compose): 圖像預處理流程。
+        mask_transform (torchvision.transforms.Compose): 掩碼預處理流程。
+    """
+
     def __init__(
         self, root, category="bottle", split="train", resize=256
     ):  # 初始化函數，設置數據集路徑、類別、數據分割和圖像大小。

@@ -17,9 +17,11 @@ disable=
     no-member,
     # ❌ 找不到屬性或方法，Pylint 對 torch / numpy / C-extension 超容易誤判，ex: tensor.view, tensor.size, model.parameters
 
-    attribute-defined-outside-init
+    attribute-defined-outside-init,
     # ❌ 在 __init__ 之外定義屬性，ML 很常在 build_model / load_checkpoint 才補屬性
-
+    
+    not-callable,
+    # ❌ 找不到屬性或方法，Pylint 對 torch / numpy / C-extension 超容易誤判，ex: tensor.view, tensor.size, model.parameters
 [FORMAT]
 max-line-length=88
 # 每行最大長度，88 是 Black 的預設值，讓 Pylint 與 Black 不打架
