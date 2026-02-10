@@ -289,7 +289,7 @@ class SSIM(torch.nn.Module):
     def __init__(
         self, window_size=11, size_average=True, val_range=None
     ):  # 初始化函數。
-        super(SSIM, self).__init__()  # 調用父類構造函數。
+        super().__init__()  # 調用父類構造函數。
         self.window_size = window_size  # 保存窗口大小。
         self.size_average = size_average  # 保存平均標誌。
         self.val_range = val_range  # 保存值範圍。
@@ -330,7 +330,7 @@ class SSIM(torch.nn.Module):
             self.window = window  # 更新緩存。
             self.channel = channel  # 更新通道數。
 
-        s_score, ssim_map = ssim(
+        s_score, _ = ssim(
             img1,
             img2,
             window=window,
