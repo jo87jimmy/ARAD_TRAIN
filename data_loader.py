@@ -168,7 +168,24 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
             glob.glob(anomaly_source_path + "/*/*.jpg")
         )  # 假設異常源是 jpg 格式。
 
-        self.augmenters = [  # 定義一系列圖像增強器，用於增加數據多樣性。
+        self.rot = iaa.Sequential(
+            [iaa.Affine(rotate=(-90, 90))]
+        )  # 定義旋轉增強器，用於旋轉 Perlin 噪聲。
+
+    def __len__(self):  # 定義 __len__ 方法。
+        return len(self.image_paths)  # 返回圖像數量。
+
+    def randAugmenter(self):  # 定義隨機選擇增強器的方法。
+        """
+        隨機選擇並組合圖像增強器。
+
+        為了確保在 DataLoader 的多進程 worker 中正確初始化 imgaug 的增強器（避免 _LUT_CACHE 錯誤），
+        我們在此方法內部定義增強器列表，而不是在 __init__ 中定義。
+
+        Returns:
+            imgaug.augmenters.Sequential: 組合後的增強器序列。
+        """
+        augmenters = [  # 定義一系列圖像增強器，用於增加數據多樣性。
             iaa.GammaContrast((0.5, 2.0), per_channel=True),  # 調整 Gamma 對比度。
             iaa.MultiplyAndAddToBrightness(
                 mul=(0.8, 1.2), add=(-30, 30)
@@ -185,33 +202,16 @@ class MVTecDRAEMTrainDataset(Dataset):  # 定義訓練數據集類，用於 DRAE
             iaa.Affine(rotate=(-45, 45)),  # 仿射變換（旋轉）。
         ]
 
-        self.rot = iaa.Sequential(
-            [iaa.Affine(rotate=(-90, 90))]
-        )  # 定義旋轉增強器，用於旋轉 Perlin 噪聲。
-
-    def __len__(self):  # 定義 __len__ 方法。
-        return len(self.image_paths)  # 返回圖像數量。
-
-    def randAugmenter(self):  # 定義隨機選擇增強器的方法。
-        """
-        隨機選擇並組合圖像增強器。
-
-        從預定義的增強器列表中隨機選擇 3 個不同的增強器，
-        並將它們組合成一個 Sequential 增強器序列。
-
-        Returns:
-            imgaug.augmenters.Sequential: 組合後的增強器序列。
-        """
         aug_ind = np.random.choice(
-            np.arange(len(self.augmenters)),  # 從增強器列表中隨機選擇索引。
+            np.arange(len(augmenters)),  # 從增強器列表中隨機選擇索引。
             3,  # 選擇 3 個。
             replace=False,
         )  # 不重複選擇。
         aug = iaa.Sequential(
             [  # 組合選中的增強器。
-                self.augmenters[aug_ind[0]],
-                self.augmenters[aug_ind[1]],  # 第一個、第二個增強器。
-                self.augmenters[aug_ind[2]],  # 第三個增強器。
+                augmenters[aug_ind[0]],
+                augmenters[aug_ind[1]],  # 第一個、第二個增強器。
+                augmenters[aug_ind[2]],  # 第三個增強器。
             ]
         )
         return aug  # 返回組合後的增強器序列。

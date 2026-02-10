@@ -23,5 +23,5 @@ disable=
     not-callable,
     # ❌ 找不到屬性或方法，Pylint 對 torch / numpy / C-extension 超容易誤判，ex: tensor.view, tensor.size, model.parameters
 [FORMAT]
-max-line-length=88
+max-line-length=120
 # 每行最大長度，88 是 Black 的預設值，讓 Pylint 與 Black 不打架
