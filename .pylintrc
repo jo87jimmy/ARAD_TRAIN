@@ -1,0 +1,25 @@
+[MESSAGES CONTROL]
+# 控制 Pylint 要「關掉哪些警告」ML常用
+
+disable=
+    invalid-name,
+    # ❌ 變數 / 函式命名不符合 Pylint 規範，ML中 x, y, z, lr 是數學語言
+
+    too-many-locals,
+    # ❌ 函式內區域變數太多，training loop / forward / loss 計算很容易爆
+
+    too-many-arguments,
+    # ❌ 函式參數太多，pipeline / trainer 初始化必多，model / trainer / pipeline 初始化常見（optimizer, scheduler, device, cfg...）
+
+    too-many-instance-attributes,
+    # ❌ class 裡屬性太多，nn.Module 幾乎一定很多層（conv, bn, fc…）
+
+    no-member,
+    # ❌ 找不到屬性或方法，Pylint 對 torch / numpy / C-extension 超容易誤判，ex: tensor.view, tensor.size, model.parameters
+
+    attribute-defined-outside-init
+    # ❌ 在 __init__ 之外定義屬性，ML 很常在 build_model / load_checkpoint 才補屬性
+
+[FORMAT]
+max-line-length=88
+# 每行最大長度，88 是 Black 的預設值，讓 Pylint 與 Black 不打架

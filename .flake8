@@ -1,0 +1,42 @@
+[flake8]
+# Flake8 的設定區段
+
+max-line-length = 120
+# 每行最大長度
+# ML / Data code 常有長 tensor 操作、log、path
+# 120 比 79 / 88 寬鬆，實務可讀性較好，tensor ops / logging / path 不用硬折行
+
+extend-ignore = E203, W503 
+# 額外忽略的錯誤代碼，E203:Black 官方建議忽略，W503:Black 允許在運算子前換行
+
+# E203：
+# slice（切片）冒號前後的空白
+# ex: a[1 : 3]
+# 這是 Black 的預設格式，Flake8 不關會一直吵
+
+# W503：
+# binary operator 換行位置
+# Black 允許在運算子前換行
+# 不忽略會和 Black 互相打架
+
+exclude =
+    .git,
+    # Git 版本控制資料夾，與程式碼檢查無關
+
+    __pycache__,
+    # Python 編譯後的快取檔（.pyc）
+    # 不應該被 lint
+
+    .venv,
+    venv,
+    # 虛擬環境資料夾
+    # 套件原始碼不需要你管
+
+    build,
+    dist,
+    # 打包、編譯輸出資料夾
+    # 不是手寫程式碼
+
+    notebooks
+    # Jupyter notebooks 資料夾
+    # .ipynb 通常不跑 flake8（除非特別轉成 .py）
