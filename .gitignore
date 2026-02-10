@@ -10,6 +10,7 @@ data/
 datasets/
 mvtec/
 dtd/
+DRAEM_checkpoints/
 # 忽略壓縮文件
 *.zip
 *.tar.gz
