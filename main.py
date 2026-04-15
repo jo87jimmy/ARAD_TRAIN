@@ -546,12 +546,12 @@ def train_epoch(models, loaders, optimizer, losses, epoch, args, device):
     lambda_recon_distill = 0.3
     lambda_seg_distill = 0.7
 
-    # 動態蒸餾權重
-    if epoch < 10:
-        lambda_distill = 0.0
-    else:
-        lambda_distill = 0.5 * (epoch / args.epochs)
-
+    # 動態蒸餾權重 不啟用
+    # if epoch < 10:
+    #     lambda_distill = 0.0
+    # else:
+    #     lambda_distill = 0.5 * (epoch / args.epochs)
+    lambda_distill = 0.5 * (epoch / args.epochs)
     epoch_loss = 0.0
     epoch_orig_seg_loss = 0.0
     num_batches = 0
